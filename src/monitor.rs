@@ -103,7 +103,7 @@ impl Monitor {
         let interval = Arc::clone(&interval_ms);
         let watches = Arc::new(Mutex::new(Vec::new()));
         let monitored = Arc::clone(&watches);
-        thread::Builder::new().name("openport-monitor".into()).spawn(move || {
+        thread::Builder::new().name("rustyport-monitor".into()).spawn(move || {
             let mut tcp_activity = TcpActivity::default();
             loop {
                 relaunch::enforce(&mut lock_watches(&monitored));

@@ -1,4 +1,4 @@
-# Feuille de route OpenPort
+# Feuille de route RustyPort
 
 ## Réalisé - Surveillance des ports et du trafic
 
@@ -7,7 +7,7 @@
   indices d'identité et d'exposition locale.
 - Trier en cliquant sur les en-têtes, notamment par risque, port, durée et
   nombre de connexions. Afficher les risques les plus élevés en premier au départ.
-- Afficher le temps écoulé depuis l'ouverture d'OpenPort, depuis la première
+- Afficher le temps écoulé depuis l'ouverture de RustyPort, depuis la première
   observation continue du port et depuis le démarrage du processus quand
   Windows communique son heure de création.
 - Afficher le nombre de connexions TCP établies associées à chaque écoute et
@@ -37,7 +37,7 @@
 - Surveiller les relances pendant la durée saisie ou jusqu'à la fermeture
   complète. Permettre l'annulation depuis « Relances ».
 - Masquer la fenêtre avec la croix et proposer « Ouvrir » et « Quitter »
-  depuis l'icône OpenPort dans la zone de notification.
+  depuis l'icône RustyPort dans la zone de notification.
 
 ## Réalisé - Menu d'actions, sélection et activité TCP
 
@@ -81,6 +81,8 @@
 
 ## À valider
 
+- Renommer le dépôt de référence en `kinowill/RustyPort` dans
+  les paramètres GitHub.
 - Exécuter sur un poste Windows avec droits d'administration un blocage
   temporaire sur un port de test et vérifier son expiration.
 - Vérifier l'invite UAC du nouvel arrêt sur un processus de test qui demande

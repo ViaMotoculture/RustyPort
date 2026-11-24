@@ -1,13 +1,13 @@
-OpenPort — Ports et protocoles
+RustyPort — Ports et protocoles
 RustyPort
 
-Lire les ports dans OpenPort
+Lire les ports dans RustyPort
 
 Un port désigne un point de communication sur une machine. Une entrée
-OpenPort indique le numéro, le protocole, l’adresse locale et le processus
+RustyPort indique le numéro, le protocole, l’adresse locale et le processus
 qui l’utilise. Le PID identifie le processus en cours d’exécution.
 
-TCP établit une connexion et remet les données dans l’ordre. OpenPort
+TCP établit une connexion et remet les données dans l’ordre. RustyPort
 affiche les ports TCP en écoute et le nombre de connexions établies
 associées au même PID, au même port et à l'adresse locale. Une écoute
 générique inclut ses adresses de la même famille IP. Une connexion peut
@@ -16,7 +16,7 @@ peuvent passer entre deux relevés.
 Référence TCP (RFC 9293) — https://www.rfc-editor.org/rfc/rfc9293.html
 
 UDP transmet des datagrammes. Ceux-ci peuvent arriver en désordre ou se
-perdre. OpenPort affiche les sockets UDP liées à un port local. Certaines
+perdre. RustyPort affiche les sockets UDP liées à un port local. Certaines
 servent à recevoir, d’autres à envoyer, et certaines font les deux.
 Référence UDP (RFC 768) — https://www.rfc-editor.org/rfc/rfc768.html
 
@@ -52,21 +52,22 @@ processus, son exécutable et les services indiqués après sélection.
 Registre IANA — https://www.iana.org/assignments/service-names-port-numbers
 Référence HTTP/3 (RFC 9114) — https://www.rfc-editor.org/rfc/rfc9114.html
 
-Les actions dans OpenPort
+Les actions dans RustyPort
 
 • Terminer le processus arrête le programme et toutes ses connexions.
   Windows libère les ports qu’il détenait.
 • Bloquer le port dans Actions du port ajoute une règle du Pare-feu Windows pour
   le numéro et le protocole choisis. Windows demande les droits
   administrateur pour cette modification.
-• Retirer le blocage supprime la règle créée par OpenPort. Si le port ne
+• Retirer le blocage supprime les règles créées par l'application, y compris
+  avant son renommage. Si le port ne
   figure plus dans la liste, saisis son numéro dans le filtre, clique sur
   Retirer le blocage et choisis TCP ou UDP.
 • Le clic droit sur une ligne donne accès aux mêmes actions. « Terminer
   et bloquer » arrête le processus après confirmation du blocage par Windows.
 • Les actions « pendant X minutes » demandent la durée au clic. Le bouton
   Annuler ferme la saisie. Windows programme le
-  retrait de la règle de blocage, même si OpenPort quitte. Si le PC est
+  retrait de la règle de blocage, même si RustyPort quitte. Si le PC est
   arrêté à l'échéance, le Planificateur de tâches reprend le retrait après
   le redémarrage. Les autres règles de pare-feu continuent de s'appliquer.
   Pour retirer un blocage en cours, sélectionne le port ou saisis son numéro
@@ -77,7 +78,7 @@ Les actions dans OpenPort
 • Une action d'arrêt grisée peut indiquer un processus système ou un PID
   que Windows ne permet pas de vérifier. Le détail affiche la cause.
   Si Windows refuse le droit de terminer un processus au moment de l'arrêt,
-  OpenPort demande une élévation et vérifie de nouveau son identité.
+  RustyPort demande une élévation et vérifie de nouveau son identité.
 
 Règles du Pare-feu Windows — https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/rules
 
@@ -101,7 +102,7 @@ une plage. La sélection est conservée pendant le tri et les relevés tant
 que les lignes restent visibles. Le clic droit propose « Plus d'infos » et
 « Rechercher sur le web ». La recherche s'ouvre dans le navigateur par
 défaut avec le nom du programme, le port et le protocole. Avec plusieurs
-lignes, OpenPort affiche la liste des cibles avant la recherche groupée
+lignes, RustyPort affiche la liste des cibles avant la recherche groupée
 ou les actions d'arrêt, de relance et de pare-feu. Les règles et les PID
 identiques sont regroupés.
 
@@ -134,7 +135,7 @@ La légende indique la couleur de chaque courbe, qui mesure le nombre de
 connexions établies. Le graphique des interfaces mesure les octets reçus
 et envoyés à l'échelle des interfaces.
 
-Si des courbes se superposent au survol, OpenPort indique les autres ports
+Si des courbes se superposent au survol, RustyPort indique les autres ports
 sur la même position. Dans la vue des débits, la ligne « TCP au même
 relevé » signale une connexion observée au moment de la mesure. Le débit
 reste celui des interfaces.
@@ -148,7 +149,7 @@ relevés temporaires après confirmation. Les commandes de sauvegarde
 exportent toute la session ou une période au format CSV. Les bornes de
 période sont relatives au lancement.
 
-La croix masque la fenêtre. Un clic sur l'icône OpenPort près de l'horloge
+La croix masque la fenêtre. Un clic sur l'icône RustyPort près de l'horloge
 ou un nouveau lancement rouvre la fenêtre. « Quitter » termine l'application
 et supprime les fichiers temporaires de la session.
 

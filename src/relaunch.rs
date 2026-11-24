@@ -118,7 +118,7 @@ mod tests {
     use std::process::{Child, Command, Stdio};
     use std::thread;
 
-    const FIXTURE_ENV: &str = "OPENPORT_RELAUNCH_TEST_FIXTURE";
+    const FIXTURE_ENV: &str = "RUSTYPORT_RELAUNCH_TEST_FIXTURE";
 
     #[test]
     fn fixture() {
@@ -136,9 +136,9 @@ mod tests {
                 let _ = self.0.wait();
             }
         }
-        let directory = std::env::temp_dir().join(format!("openport-test-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("rustyport-test-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
-        let executable = directory.join("openport-fixture.exe");
+        let executable = directory.join("rustyport-fixture.exe");
         fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
         let mut fixture = Fixture(Command::new(&executable)
             .args(["--exact", "relaunch::tests::fixture"])
@@ -146,7 +146,7 @@ mod tests {
 
         let process = open(fixture.0.id(), PROCESS_QUERY_LIMITED_INFORMATION).unwrap();
         let image = ports::image_path(&process, &mut [0; 32768]).unwrap();
-        let mut watch = Watch { name: "openport-fixture.exe".into(), image, until: Some(Instant::now()) };
+        let mut watch = Watch { name: "rustyport-fixture.exe".into(), image, until: Some(Instant::now()) };
         enforce(&mut vec![watch.clone()]);
         assert!(fixture.0.try_wait().unwrap().is_none());
 

@@ -23,7 +23,7 @@ pub struct Archive {
 impl Archive {
     pub fn open(start: Instant) -> io::Result<Self> {
         let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let prefix = format!("openport-{}-{unique}", std::process::id());
+        let prefix = format!("rustyport-{}-{unique}", std::process::id());
         let open = |extension| {
             let path = std::env::temp_dir().join(format!("{prefix}.{extension}"));
             let file = OpenOptions::new().read(true).write(true).create_new(true)
@@ -126,7 +126,7 @@ impl Archive {
 
     pub fn export(&mut self, destination: &Path, range: Option<(u64, u64)>) -> io::Result<usize> {
         let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let temporary = destination.with_file_name(format!(".openport-export-{}-{unique}.part", std::process::id()));
+        let temporary = destination.with_file_name(format!(".rustyport-export-{}-{unique}.part", std::process::id()));
         let output = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
         let result = self.write_csv(BufWriter::new(output), range);
         let result = result.and_then(|count| {
@@ -220,7 +220,7 @@ fn read_string(input: &mut Cursor<&[u8]>) -> io::Result<String> {
 }
 
 fn invalid() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "Archive OpenPort illisible")
+    io::Error::new(io::ErrorKind::InvalidData, "Archive RustyPort illisible")
 }
 
 #[cfg(test)]

@@ -9,8 +9,8 @@ use crate::elevation;
 use crate::ports::{Handle, Port, StopTarget};
 use crate::{ports, relaunch};
 
-pub const HELPER_FLAG: &str = "--openport-stop";
-pub const BATCH_FLAG: &str = "--openport-stop-batch";
+pub const HELPER_FLAG: &str = "--rustyport-stop";
+pub const BATCH_FLAG: &str = "--rustyport-stop-batch";
 const BATCH_RESULT: u32 = 0x1000000;
 const CHANGED: u32 = 0x10000;
 const PROTECTED: u32 = 0x10001;
@@ -100,7 +100,7 @@ pub struct LocalResult {
 
 pub fn local_batch(ports: Vec<Port>, mode: Mode, system_directory: String) -> io::Result<Receiver<LocalResult>> {
     let (sender, receiver) = mpsc::channel();
-    std::thread::Builder::new().name("openport-stop".into()).spawn(move || {
+    std::thread::Builder::new().name("rustyport-stop".into()).spawn(move || {
         let mut stopped = 0;
         let mut denied = Vec::new();
         let mut watches = Vec::new();

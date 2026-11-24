@@ -1,6 +1,6 @@
-# OpenPort - RustyPort
+# RustyPort
 
-Pour travailler sur OpenPort, appliquer le Protocole MAITRE installé pour le
+Pour travailler sur RustyPort, appliquer le Protocole MAITRE installé pour le
 compte utilisateur. Consulter `DOCUMENT_MAITRE.md`, `ROADMAP.md` et le dernier
 résultat de `VALIDATION_LOG.md` avant d'intervenir.
 

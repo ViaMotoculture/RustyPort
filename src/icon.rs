@@ -12,7 +12,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateIconFromResourceEx, DestroyIcon, HICON, IDI_APPLICATION, LoadIconW,
 };
 
-const DATA: &[u8] = include_bytes!("../assets/OpenPort.ico");
+const DATA: &[u8] = include_bytes!("../assets/RustyPort.ico");
 
 pub struct Icon {
     pub handle: HICON,

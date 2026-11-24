@@ -1,4 +1,4 @@
-# Journal de validation OpenPort
+# Journal de validation RustyPort
 
 ## 2026-11-24 - État initial
 
@@ -85,3 +85,17 @@
 - Windows a trouvé le groupe d'icônes dans le binaire de livraison.
   SHA-256
   `592BBB18A024512530C5CB7E4023475625EA7A86DE346CF1686C48AAD2D4EEC2`.
+
+## 2026-11-24 - Renommage en RustyPort
+
+- Les 15 tests, `cargo check --all-targets --locked` et
+  `cargo build --release --locked` ont réussi sous Windows.
+- Une instance de test hors écran a affiché le titre RustyPort et son icône.
+  Le tri, les survols et le volet d'historique ont été vérifiés dans cette
+  instance. Windows a trouvé le groupe d'icônes dans `RustyPort.exe`.
+- Les commandes de réutilisation et de retrait des anciennes règles de
+  pare-feu ont été testées avec des fonctions PowerShell simulées.
+- SHA-256 de l'exécutable de livraison
+  `9D39D27B546673DFE2E8A4FB94719A652FB71EB38ED8B06014D4A4B56F7DD39C`.
+- Le connecteur GitHub peut publier sur `main`. Le renommage du dépôt
+  reste à effectuer dans les paramètres de GitHub.

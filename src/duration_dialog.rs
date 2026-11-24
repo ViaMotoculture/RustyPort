@@ -115,14 +115,14 @@ unsafe extern "system" fn range_message(window: HWND, message: u32, wparam: WPAR
 
 pub fn save_csv(owner: HWND) -> io::Result<Option<PathBuf>> {
     let mut file = vec![0u16; 32768];
-    let proposed = wide("OpenPort-releves.csv");
+    let proposed = wide("RustyPort-releves.csv");
     file[..proposed.len()].copy_from_slice(&proposed);
     let filter = wide("Fichiers CSV (*.csv)\0*.csv\0");
     let mut request = OPENFILENAMEW {
         lStructSize: size_of::<OPENFILENAMEW>() as u32,
         hwndOwner: owner, lpstrFilter: filter.as_ptr(), nFilterIndex: 1,
         lpstrFile: file.as_mut_ptr(), nMaxFile: file.len() as u32,
-        lpstrDefExt: w!("csv"), lpstrTitle: w!("Sauvegarder les relevés OpenPort"),
+        lpstrDefExt: w!("csv"), lpstrTitle: w!("Sauvegarder les relevés RustyPort"),
         Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST,
         ..Default::default()
     };
@@ -235,7 +235,7 @@ mod tests {
     fn native_duration_dialog_validates_input_and_cancels() {
         for cancel in [false, true] {
             let thread_id = unsafe { GetCurrentThreadId() };
-            let title = format!("OpenPort test durée {thread_id}");
+            let title = format!("RustyPort test durée {thread_id}");
             let lookup = wide(&title);
             let driver = thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(5);

@@ -66,6 +66,10 @@ const SS_ENDELLIPSIS: u32 = 0x4000;
 const EXIT_MENU: usize = 450;
 const FIREWALL_TIMER: usize = 1;
 const MONITOR_TIMER: usize = 2;
+// Keep the singleton identifiers shared with existing OpenPort executables.
+const SINGLETON_CLASS: PCWSTR = w!("OpenPortWindow");
+const SINGLETON_MUTEX: PCWSTR = w!("Local\\RustyPort.OpenPort");
+const SINGLETON_PROPERTY: PCWSTR = w!("RustyPort.OpenPort");
 
 struct PendingStop {
     job: stop_job::Job,
@@ -154,7 +158,7 @@ impl App {
     fn new(window: HWND) -> io::Result<Self> {
         let label = |text| control(window, w!("STATIC"), text, SS_CENTERIMAGE | SS_ENDELLIPSIS, 0, false);
         let brand_icon = control(window, w!("STATIC"), "", SS_ICON | SS_CENTERIMAGE, 0, false)?;
-        let brand = label("OpenPort")?;
+        let brand = label("RustyPort")?;
         let session = label("")?;
         let interval_label = label("Cadence")?;
         let interval = control(window, w!("COMBOBOX"), "", CBS_DROPDOWNLIST as u32 | WS_VSCROLL, ID_INTERVAL, false)?;
@@ -221,7 +225,7 @@ impl App {
         let stop = control(window, w!("BUTTON"), "Terminer le processus…", 0, ID_STOP, false)?;
         let unblock = control(window, w!("BUTTON"), "Retirer le blocage", 0, ID_UNBLOCK, false)?;
         let watches = control(window, w!("BUTTON"), "Relances (0)…", 0, ID_WATCHES, false)?;
-        let status = label("La croix masque OpenPort · Quitter depuis la zone de notification")?;
+        let status = label("La croix masque RustyPort · Quitter depuis la zone de notification")?;
         unsafe { EnableWindow(watches, 0) };
         let started = Instant::now();
         let monitor = Monitor::start()?;
@@ -746,7 +750,7 @@ impl App {
             None => return,
         };
         let (sender, receiver) = std::sync::mpsc::channel();
-        match std::thread::Builder::new().name("openport-export".into()).spawn(move || {
+        match std::thread::Builder::new().name("rustyport-export".into()).spawn(move || {
             let _ = sender.send(reader.export(&destination, range));
         }) {
             Ok(_) => {
@@ -774,7 +778,7 @@ impl App {
     fn quit(&self) {
         if self.pending_export.borrow().is_some() {
             unsafe { MessageBoxW(self.window, w!("La sauvegarde CSV est en cours. Réessaie après la fin de l’export."),
-                w!("OpenPort"), MB_OK | MB_ICONINFORMATION) };
+                w!("RustyPort"), MB_OK | MB_ICONINFORMATION) };
             return;
         }
         unsafe { DestroyWindow(self.window) };
@@ -838,7 +842,7 @@ impl App {
                     GetCursorPos(&mut position);
                     SetForegroundWindow(self.window);
                 }
-                let choice = popup_menu(self.window, position, &[(1, "Ouvrir OpenPort", true), (2, "Quitter OpenPort", true)]);
+                let choice = popup_menu(self.window, position, &[(1, "Ouvrir RustyPort", true), (2, "Quitter RustyPort", true)]);
                 unsafe { PostMessageW(self.window, WM_NULL, 0, 0) };
                 match choice {
                     1 => self.restore_window(),
@@ -1178,7 +1182,7 @@ impl App {
         let message = format!("Terminer {} (PID {}) ?\n{consequence}", port.owner.name, port.endpoint.pid);
         let answer = unsafe {
             MessageBoxW(
-                self.window, wide(&message).as_ptr(), w!("OpenPort"),
+                self.window, wide(&message).as_ptr(), w!("RustyPort"),
                 MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION,
             )
         };
@@ -1273,7 +1277,7 @@ impl App {
             set_text(self.status, &error.to_string());
             return;
         }
-        let period = minutes.map_or_else(|| "jusqu’à la fermeture complète d’OpenPort".into(), |minutes| format!("pendant {minutes} min"));
+        let period = minutes.map_or_else(|| "jusqu’à la fermeture complète de RustyPort".into(), |minutes| format!("pendant {minutes} min"));
         let message = format!("Les nouvelles instances du même fichier seront arrêtées {period}.");
         if self.ask_stop(&port, &message) {
             let result = ports::stop(&port).map_err(|error| {
@@ -1457,7 +1461,7 @@ impl App {
             2 | 3 => "Bloquer le trafic entrant",
             4 | 5 => "Bloquer puis terminer les processus",
             6 | 7 => "Terminer et surveiller les relances",
-            8 => "Retirer les blocages OpenPort",
+            8 => "Retirer les blocages RustyPort",
             _ => return,
         };
         let period = minutes.map_or_else(String::new, |minutes| format!(" · {minutes} min"));
@@ -1642,7 +1646,7 @@ impl App {
                 let firewall = match job.action {
                     FirewallAction::Block => format!("Trafic entrant bloqué · {endpoint}."),
                     FirewallAction::Timed(minutes) => format!("Trafic entrant bloqué pendant {minutes} min · {endpoint}."),
-                    FirewallAction::Remove => format!("Blocages OpenPort retirés · {endpoint}."),
+                    FirewallAction::Remove => format!("Blocages RustyPort retirés · {endpoint}."),
                 };
                 if processes.len() > 1 {
                     self.request_bulk_stop(processes, stop_job::Mode::Once, format!("{firewall} "));
@@ -1938,21 +1942,20 @@ fn create_window() -> io::Result<HWND> {
             return Err(io::Error::other("La liste Windows n’a pas pu être initialisée."));
         }
         let instance = GetModuleHandleW(null());
-        let class = w!("OpenPortWindow");
         let definition = WNDCLASSW {
             lpfnWndProc: Some(handle_message),
             hInstance: instance,
             hCursor: LoadCursorW(null_mut(), IDC_ARROW),
             hIcon: LoadIconW(null_mut(), IDI_APPLICATION),
             hbrBackground: (COLOR_BTNFACE + 1) as HBRUSH,
-            lpszClassName: class,
+            lpszClassName: SINGLETON_CLASS,
             ..Default::default()
         };
         if RegisterClassW(&definition) == 0 {
             return Err(io::Error::last_os_error());
         }
         let window = CreateWindowExW(
-            0, class, w!("OpenPort — Surveillance réseau"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            0, SINGLETON_CLASS, w!("RustyPort — Surveillance réseau"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT, CW_USEDEFAULT, 1100, 760, null_mut(), null_mut(), instance, null(),
         );
         if window.is_null() { Err(io::Error::last_os_error()) } else { Ok(window) }
@@ -1960,7 +1963,7 @@ fn create_window() -> io::Result<HWND> {
 }
 
 fn run() -> io::Result<()> {
-    let instance = unsafe { CreateMutexW(null(), 0, w!("Local\\RustyPort.OpenPort")) };
+    let instance = unsafe { CreateMutexW(null(), 0, SINGLETON_MUTEX) };
     if instance.is_null() {
         return Err(io::Error::last_os_error());
     }
@@ -1970,11 +1973,11 @@ fn run() -> io::Result<()> {
         for _ in 0..30 {
             let mut previous = null_mut();
             loop {
-                let window = unsafe { FindWindowExW(null_mut(), previous, w!("OpenPortWindow"), null()) };
+                let window = unsafe { FindWindowExW(null_mut(), previous, SINGLETON_CLASS, null()) };
                 if window.is_null() {
                     break;
                 }
-                if !unsafe { GetPropW(window, w!("RustyPort.OpenPort")) }.is_null() {
+                if !unsafe { GetPropW(window, SINGLETON_PROPERTY) }.is_null() {
                     unsafe {
                         ShowWindowAsync(window, SW_RESTORE);
                         SetForegroundWindow(window);
@@ -2007,12 +2010,12 @@ fn run() -> io::Result<()> {
             return Err(error);
         }
         ShowWindow(window, SW_SHOW);
-        SetPropW(window, w!("RustyPort.OpenPort"), 1usize as HANDLE);
+        SetPropW(window, SINGLETON_PROPERTY, 1usize as HANDLE);
         app.tray.install();
         let system_menu = GetSystemMenu(window, 0);
         if !system_menu.is_null() {
             AppendMenuW(system_menu, MF_SEPARATOR, 0, null());
-            AppendMenuW(system_menu, MF_STRING, EXIT_MENU, w!("Quitter OpenPort"));
+            AppendMenuW(system_menu, MF_STRING, EXIT_MENU, w!("Quitter RustyPort"));
         }
         SetFocus(app.filter);
         let mut message = MSG::default();
@@ -2045,7 +2048,7 @@ fn main() {
     }
     if let Err(error) = run() {
         let error = wide(&error.to_string());
-        unsafe { MessageBoxW(null_mut(), error.as_ptr(), w!("OpenPort"), MB_ICONERROR) };
+        unsafe { MessageBoxW(null_mut(), error.as_ptr(), w!("RustyPort"), MB_ICONERROR) };
     }
 }
 

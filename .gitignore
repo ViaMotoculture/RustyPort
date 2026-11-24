@@ -1,6 +1,6 @@
 /target/
 /.publication/
-/OpenPort.exe
+/RustyPort.exe
 /.env
 /.env.*
 /.agents/

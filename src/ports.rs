@@ -139,7 +139,7 @@ impl Port {
         if pid <= 4 {
             Some("Processus système réservé par Windows.")
         } else if pid == std::process::id() {
-            Some("Utilise « Quitter OpenPort » pour fermer cette application.")
+            Some("Utilise « Quitter RustyPort » pour fermer cette application.")
         } else if self.owner.created.is_none() {
             Some("Windows ne communique pas l’heure de démarrage qui permet de vérifier ce PID.")
         } else {
@@ -480,7 +480,7 @@ impl StopTarget {
     pub fn stop(self) -> io::Result<()> {
         let pid = self.endpoint.pid;
         if pid <= 4 || pid == std::process::id() {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Processus protégé par OpenPort"));
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Processus protégé par RustyPort"));
         }
         let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, 0, pid) };
         if raw.is_null() {

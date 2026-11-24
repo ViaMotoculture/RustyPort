@@ -42,7 +42,7 @@ impl Tray {
         icon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         icon.uCallbackMessage = TRAY_MESSAGE;
         icon.hIcon = self.icon;
-        for (slot, value) in icon.szTip.iter_mut().zip("OpenPort - Surveillance réseau".encode_utf16()) {
+        for (slot, value) in icon.szTip.iter_mut().zip("RustyPort - Surveillance réseau".encode_utf16()) {
             *slot = value;
         }
         let installed = unsafe { Shell_NotifyIconW(NIM_ADD, &icon) } != 0;
