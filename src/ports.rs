@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::mem::size_of;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::ptr::{null, null_mut};
+use std::sync::Arc;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::*;
@@ -102,13 +103,48 @@ impl Owner {
 pub struct Port {
     pub endpoint: Endpoint,
     pub owner: Owner,
-    pub established: usize,
+    pub established: Arc<BTreeSet<TcpConnection>>,
+    pub recent_tcp: Option<usize>,
+}
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TcpConnection {
+    local: Endpoint,
+    peer: SocketAddr,
+}
+
+impl TcpConnection {
+    pub fn peer_label(self) -> String {
+        self.peer.to_string()
+    }
 }
 
 impl Port {
+    pub fn key(&self) -> (Endpoint, Option<u64>) {
+        (self.endpoint, self.owner.created)
+    }
+
+    pub fn graph_key(&self) -> String {
+        let endpoint = self.endpoint;
+        format!("{} {} {} {}", endpoint.label(), endpoint.address_label(),
+            endpoint.pid, self.owner.created.unwrap_or(0))
+    }
+
     pub fn can_stop(&self) -> bool {
+        self.stop_unavailable_reason().is_none()
+    }
+
+    pub fn stop_unavailable_reason(&self) -> Option<&'static str> {
         let pid = self.endpoint.pid;
-        pid > 4 && pid != std::process::id() && self.owner.created.is_some()
+        if pid <= 4 {
+            Some("Processus système réservé par Windows.")
+        } else if pid == std::process::id() {
+            Some("Utilise « Quitter OpenPort » pour fermer cette application.")
+        } else if self.owner.created.is_none() {
+            Some("Windows ne communique pas l’heure de démarrage qui permet de vérifier ce PID.")
+        } else {
+            None
+        }
     }
 }
 
@@ -171,7 +207,7 @@ fn table<T: Copy>(mut query: impl FnMut(*mut std::ffi::c_void, &mut u32) -> u32)
     Err(io::Error::from_raw_os_error(ERROR_INSUFFICIENT_BUFFER as i32))
 }
 
-fn endpoints() -> io::Result<BTreeMap<Endpoint, usize>> {
+fn endpoints() -> io::Result<BTreeMap<Endpoint, BTreeSet<TcpConnection>>> {
     let tcp = |family, buffer, size: &mut u32| unsafe {
         GetExtendedTcpTable(buffer, size, 0, u32::from(family), TCP_TABLE_OWNER_PID_ALL, 0)
     };
@@ -185,42 +221,50 @@ fn endpoints() -> io::Result<BTreeMap<Endpoint, usize>> {
             Protocol::Tcp, Ipv4Addr::from(entry.dwLocalAddr.to_ne_bytes()).into(),
             0, entry.dwLocalPort, entry.dwOwningPid,
         );
-        (endpoint, entry.dwState as MIB_TCP_STATE)
+        let peer = SocketAddr::new(
+            Ipv4Addr::from(entry.dwRemoteAddr.to_ne_bytes()).into(),
+            u16::from_be(entry.dwRemotePort as u16),
+        );
+        (TcpConnection { local: endpoint, peer }, entry.dwState as MIB_TCP_STATE)
     });
     let ipv6 = ipv6.into_iter().map(|entry| {
         let endpoint = Endpoint::new(
             Protocol::Tcp, Ipv6Addr::from(entry.ucLocalAddr).into(),
             entry.dwLocalScopeId, entry.dwLocalPort, entry.dwOwningPid,
         );
-        (endpoint, entry.dwState as MIB_TCP_STATE)
+        let peer = SocketAddrV6::new(
+            Ipv6Addr::from(entry.ucRemoteAddr), u16::from_be(entry.dwRemotePort as u16),
+            0, u32::from_be(entry.dwRemoteScopeId),
+        ).into();
+        (TcpConnection { local: endpoint, peer }, entry.dwState as MIB_TCP_STATE)
     });
     let mut endpoints = BTreeMap::new();
     let mut established = Vec::new();
-    for (endpoint, state) in ipv4.chain(ipv6) {
+    for (connection, state) in ipv4.chain(ipv6) {
         match state {
-            MIB_TCP_STATE_LISTEN => { endpoints.insert(endpoint, 0); }
-            MIB_TCP_STATE_ESTAB => established.push(endpoint),
+            MIB_TCP_STATE_LISTEN => { endpoints.insert(connection.local, BTreeSet::new()); }
+            MIB_TCP_STATE_ESTAB => established.push(connection),
             _ => {}
         }
     }
-    for endpoint in established {
-        if let Some(count) = endpoints.get_mut(&endpoint) {
-            *count += 1;
-        } else if let Some(count) = endpoints.get_mut(&endpoint.wildcard()) {
-            *count += 1;
+    for connection in established {
+        if let Some(connections) = endpoints.get_mut(&connection.local) {
+            connections.insert(connection);
+        } else if let Some(connections) = endpoints.get_mut(&connection.local.wildcard()) {
+            connections.insert(connection);
         }
     }
     for entry in table::<MIB_UDPROW_OWNER_PID>(|buffer, size| udp(AF_INET, buffer, size))? {
         endpoints.insert(Endpoint::new(
             Protocol::Udp, Ipv4Addr::from(entry.dwLocalAddr.to_ne_bytes()).into(),
             0, entry.dwLocalPort, entry.dwOwningPid,
-        ), 0);
+        ), BTreeSet::new());
     }
     for entry in table::<MIB_UDP6ROW_OWNER_PID>(|buffer, size| udp(AF_INET6, buffer, size))? {
         endpoints.insert(Endpoint::new(
             Protocol::Udp, Ipv6Addr::from(entry.ucLocalAddr).into(),
             entry.dwLocalScopeId, entry.dwLocalPort, entry.dwOwningPid,
-        ), 0);
+        ), BTreeSet::new());
     }
     Ok(endpoints)
 }
@@ -378,32 +422,86 @@ pub fn list() -> io::Result<Vec<Port>> {
     Ok(endpoints
         .into_iter()
         .map(|(endpoint, established)| Port {
-            endpoint, owner: owners[&endpoint.pid].clone(), established,
+            endpoint, owner: owners[&endpoint.pid].clone(),
+            established: Arc::new(established), recent_tcp: None,
         })
         .collect())
 }
 
 pub fn stop(port: &Port) -> io::Result<()> {
-    if !port.can_stop() {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Processus indisponible"));
+    StopTarget::from_port(port)?.stop()
+}
+
+#[derive(Clone, Copy)]
+pub struct StopTarget {
+    endpoint: Endpoint,
+    created: u64,
+}
+
+impl StopTarget {
+    pub fn from_port(port: &Port) -> io::Result<Self> {
+        if let Some(reason) = port.stop_unavailable_reason() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, reason));
+        }
+        let created = port.owner.created.ok_or_else(invalid_stop_target)?;
+        Ok(Self { endpoint: port.endpoint, created })
     }
-    let pid = port.endpoint.pid;
-    let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, 0, pid) };
-    if raw.is_null() {
-        return Err(io::Error::last_os_error());
+
+    pub fn arguments(self) -> String {
+        let endpoint = self.endpoint;
+        format!("{} {} {} {} {} {}", endpoint.pid, self.created, endpoint.protocol.name(),
+            endpoint.address, endpoint.scope, endpoint.port)
     }
-    let process = Handle(raw);
-    if Some(creation_time(&process)?) != port.owner.created || !endpoints()?.contains_key(&port.endpoint) {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "Le port a changé. Actualise la liste."));
+
+    pub fn parse(arguments: impl Iterator<Item = String>) -> io::Result<Self> {
+        let arguments: Vec<_> = arguments.take(7).collect();
+        let [pid, created, protocol, address, scope, port] = arguments.as_slice() else {
+            return Err(invalid_stop_target());
+        };
+        let protocol = match protocol.as_str() {
+            "TCP" => Protocol::Tcp,
+            "UDP" => Protocol::Udp,
+            _ => return Err(invalid_stop_target()),
+        };
+        let endpoint = Endpoint {
+            pid: pid.parse().map_err(|_| invalid_stop_target())?,
+            protocol,
+            address: address.parse().map_err(|_| invalid_stop_target())?,
+            scope: scope.parse().map_err(|_| invalid_stop_target())?,
+            port: port.parse().map_err(|_| invalid_stop_target())?,
+        };
+        let created = created.parse().map_err(|_| invalid_stop_target())?;
+        if created == 0 || endpoint.port == 0 || (endpoint.address.is_ipv4() && endpoint.scope != 0) {
+            return Err(invalid_stop_target());
+        }
+        Ok(Self { endpoint, created })
     }
-    terminate(&process)?;
-    match unsafe { WaitForSingleObject(process.0, 800) } {
-        WAIT_OBJECT_0 => Ok(()),
-        WAIT_TIMEOUT => Err(io::Error::new(io::ErrorKind::TimedOut, "Le processus est encore en cours d’arrêt")),
-        _ => Err(io::Error::last_os_error()),
+
+    pub fn stop(self) -> io::Result<()> {
+        let pid = self.endpoint.pid;
+        if pid <= 4 || pid == std::process::id() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Processus protégé par OpenPort"));
+        }
+        let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, 0, pid) };
+        if raw.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let process = Handle(raw);
+        if creation_time(&process)? != self.created || !endpoints()?.contains_key(&self.endpoint) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Le port ou le processus a changé. Actualise la liste."));
+        }
+        terminate(&process)?;
+        match unsafe { WaitForSingleObject(process.0, 800) } {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => Err(io::Error::new(io::ErrorKind::TimedOut, "Le processus est encore en cours d’arrêt")),
+            _ => Err(io::Error::last_os_error()),
+        }
     }
 }
 
+fn invalid_stop_target() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, "Identité du processus invalide")
+}
 pub(crate) fn terminate(process: &Handle) -> io::Result<()> {
     let mut critical = 0;
     if unsafe { IsProcessCritical(process.0, &mut critical) } == 0 {
@@ -445,7 +543,7 @@ mod tests {
                         && endpoint.protocol == Protocol::Tcp
                         && endpoint.port == address.port()
                         && endpoint.address == address.ip()
-                }).unwrap().1
+                }).unwrap().1.len()
             };
             assert_eq!(established(), 0);
             let client = TcpStream::connect((connect, address.port())).unwrap();
@@ -507,8 +605,12 @@ mod tests {
         let mut stale = port.clone();
         stale.owner.created = stale.owner.created.map(|time| time ^ 1);
         assert_eq!(stop(&stale).unwrap_err().kind(), io::ErrorKind::NotFound);
+        let arguments = StopTarget::from_port(&stale).unwrap().arguments();
+        let code = crate::stop_job::run_helper(arguments.split_whitespace().map(str::to_owned));
+        assert_ne!(code, 0);
         assert!(child.0.try_wait().unwrap().is_none());
-        stop(&port).unwrap();
+        let arguments = StopTarget::from_port(&port).unwrap().arguments();
+        assert_eq!(crate::stop_job::run_helper(arguments.split_whitespace().map(str::to_owned)), 0);
         assert!(!endpoints().unwrap().contains_key(&port.endpoint));
     }
 }

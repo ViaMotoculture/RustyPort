@@ -39,9 +39,40 @@
 - Masquer la fenêtre avec la croix et proposer « Ouvrir » et « Quitter »
   depuis l'icône OpenPort dans la zone de notification.
 
+## Réalisé - Menu d'actions, sélection et activité TCP
+
+- Demander la durée au clic sur une action temporaire. Échap et Annuler
+  ferment la saisie. Le retrait du blocage et l'annulation de la surveillance
+  restent disponibles après activation.
+- Expliquer les actions grisées et les critères de niveau. Ajouter des
+  teintes discrètes et garder les couleurs système en contraste élevé.
+- Si Windows refuse le droit d'arrêt, proposer l'élévation UAC et vérifier
+  à nouveau le PID, l'identité du processus, le port et le statut critique.
+- Trier par connexions TCP établies ou nouvelles connexions TCP observées
+  dans la dernière minute.
+- Sélectionner plusieurs lignes avec Ctrl+A, Ctrl+clic ou en glissant.
+  Conserver la sélection pendant les relevés et le tri.
+- Proposer les détails et la recherche web sur la ligne visée.
+- Appliquer les actions au groupe après confirmation de ses cibles.
+  Regrouper les PID identiques et les règles de pare-feu de même port et
+  protocole. Indiquer le résultat des actions qui réussissent ou échouent.
+- Démarrer les relevés à 500 ms. Le journal consigne la vérification du
+  port VPBA dans les tables Windows.
+- Figer l'affichage du graphique sur demande et afficher les connexions
+  et processus observés au survol d'un échantillon. Conserver la mesure
+  globale et la collecte en tâche de fond.
+- Paginer l'historique sur disque et supprimer la session avec « Quitter ».
+  Afficher la taille, proposer le nettoyage et suspendre les écritures sur demande.
+  Garder l'archivage désactivé au lancement. Exporter en CSV toute la session
+  ou une période choisie.
+- Réouvrir la fenêtre de l'instance active au prochain lancement et intégrer
+  l'icône aux ressources du fichier exécutable.
+
 ## À valider
 
 - Exécuter sur un poste Windows avec droits d'administration un blocage
   temporaire sur un port de test et vérifier son expiration.
+- Vérifier l'invite UAC du nouvel arrêt sur un processus de test qui demande
+  une élévation.
 - Publier les commits de RustyPort sur la branche `main` du dépôt
   de référence. Le journal indique l'état de l'accès Git.

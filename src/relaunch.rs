@@ -24,17 +24,32 @@ impl Watch {
 }
 
 pub fn can_watch(port: &Port, system_directory: &str) -> bool {
-    let Some((windows, _)) = system_directory.rsplit_once('\\') else { return false };
+    unavailable_reason(port, system_directory).is_none()
+}
+
+pub fn unavailable_reason(port: &Port, system_directory: &str) -> Option<&'static str> {
+    if let Some(reason) = port.stop_unavailable_reason() {
+        return Some(reason);
+    }
+    let Some((windows, _)) = system_directory.rsplit_once('\\') else {
+        return Some("Le dossier système Windows est indisponible.");
+    };
     let path = &port.owner.path;
-    port.can_stop() && Path::new(path).is_absolute()
-        && port.owner.services.is_empty() && port.owner.known_services.is_empty()
-        && !path.get(..windows.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(windows)
+    if !Path::new(path).is_absolute() {
+        Some("Le chemin complet de l’application est indisponible.")
+    } else if !port.owner.services.is_empty() || !port.owner.known_services.is_empty()
+        || path.get(..windows.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(windows)
             && path.as_bytes().get(windows.len()) == Some(&b'\\'))
+    {
+        Some("La surveillance des relances est réservée aux applications utilisateur.")
+    } else {
+        None
+    }
 }
 
 pub fn prepare(port: &Port, system_directory: &str) -> io::Result<()> {
-    if !can_watch(port, system_directory) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Relance surveillable uniquement pour une application utilisateur identifiée"));
+    if let Some(reason) = unavailable_reason(port, system_directory) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, reason));
     }
     let process = open(port.endpoint.pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
     if account_sid(process.0)? != account_sid(unsafe { GetCurrentProcess() })? {

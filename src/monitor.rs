@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
 use std::ptr::{addr_of, null_mut};
 use std::sync::{Arc, Mutex, MutexGuard, atomic::{AtomicU64, Ordering}, mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError}};
@@ -11,12 +11,51 @@ use windows_sys::Win32::NetworkManagement::IpHelper::{
 };
 use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 
-use crate::ports::{self, Port};
+use crate::ports::{self, Endpoint, Port, Protocol, TcpConnection};
 use crate::relaunch::{self, Watch};
 
+#[cfg(test)]
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+pub const DEFAULT_INTERVAL_MS: u64 = 500;
 pub const INTERVALS: [(u64, &str); 6] = [(250, "250 ms"), (500, "500 ms"), (1000, "1 s"), (2000, "2 s"), (5000, "5 s"), (10000, "10 s")];
 pub const GRAPH_WINDOW: Duration = Duration::from_secs(60);
+const TCP_ACTIVITY_WINDOW: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+struct TcpActivity {
+    listeners: BTreeMap<(Endpoint, Option<u64>), TcpListenerActivity>,
+}
+
+struct TcpListenerActivity {
+    established: Arc<BTreeSet<TcpConnection>>,
+    arrivals: VecDeque<(Instant, usize)>,
+}
+
+impl TcpActivity {
+    fn update(&mut self, at: Instant, ports: &mut [Port]) {
+        let mut previous = std::mem::take(&mut self.listeners);
+        for port in ports.iter_mut().filter(|port| port.endpoint.protocol == Protocol::Tcp) {
+            let key = port.key();
+            let mut arrivals = VecDeque::new();
+            if let Some(last) = previous.remove(&key) {
+                arrivals = last.arrivals;
+                while arrivals.front().is_some_and(|(seen, _)| {
+                    at.saturating_duration_since(*seen) >= TCP_ACTIVITY_WINDOW
+                }) {
+                    arrivals.pop_front();
+                }
+                let arrived = port.established.difference(&last.established).count();
+                if arrived > 0 {
+                    arrivals.push_back((at, arrived));
+                }
+                port.recent_tcp = Some(arrivals.iter().map(|(_, count)| count).sum());
+            }
+            self.listeners.insert(key, TcpListenerActivity {
+                established: Arc::clone(&port.established), arrivals,
+            });
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct InterfaceBytes {
@@ -34,7 +73,18 @@ pub struct Reading {
 
 impl Reading {
     pub fn apply(self, history: &mut TrafficHistory) -> (Instant, io::Result<Vec<Port>>, TrafficState) {
-        (self.at, self.ports, history.record(self.at, self.interfaces))
+        let mut sockets = self.ports.as_deref().unwrap_or_default().iter()
+            .filter(|port| port.endpoint.protocol == Protocol::Tcp)
+            .map(|port| SocketActivity {
+                key: port.graph_key(),
+                name: port.owner.name.clone(),
+                endpoint: port.endpoint.label(),
+                address: port.endpoint.address_label(),
+                peer: port.established.iter().next().map_or_else(String::new, |peer| peer.peer_label()),
+                established: port.established.len() as u32,
+            }).collect::<Vec<_>>();
+        sockets.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+        (self.at, self.ports, history.record(self.at, self.interfaces, sockets))
     }
 }
 
@@ -49,16 +99,22 @@ impl Monitor {
     pub fn start() -> io::Result<Self> {
         let (refresh, requests) = mpsc::sync_channel(1);
         let (publish, readings) = mpsc::sync_channel(1);
-        let interval_ms = Arc::new(AtomicU64::new(POLL_INTERVAL.as_millis() as u64));
+        let interval_ms = Arc::new(AtomicU64::new(DEFAULT_INTERVAL_MS));
         let interval = Arc::clone(&interval_ms);
         let watches = Arc::new(Mutex::new(Vec::new()));
         let monitored = Arc::clone(&watches);
         thread::Builder::new().name("openport-monitor".into()).spawn(move || {
+            let mut tcp_activity = TcpActivity::default();
             loop {
                 relaunch::enforce(&mut lock_watches(&monitored));
-                let ports = ports::list();
+                let mut ports = ports::list();
                 let interfaces = read_interfaces();
-                let reading = Reading { at: Instant::now(), ports, interfaces };
+                let at = Instant::now();
+                match &mut ports {
+                    Ok(ports) => tcp_activity.update(at, ports),
+                    Err(_) => tcp_activity.listeners.clear(),
+                }
+                let reading = Reading { at, ports, interfaces };
                 if publish.send(reading).is_err()
                     || requests.recv_timeout(Duration::from_millis(interval.load(Ordering::Relaxed))) == Err(RecvTimeoutError::Disconnected)
                 {
@@ -166,10 +222,29 @@ pub enum TrafficState {
     Measured { rates: Rates, interfaces: usize },
 }
 
+#[derive(Clone)]
+pub struct SocketActivity {
+    pub key: String,
+    pub name: String,
+    pub endpoint: String,
+    pub address: String,
+    pub peer: String,
+    pub established: u32,
+}
+
+#[derive(Clone)]
 pub struct Point {
     pub at: Instant,
     pub rates: Option<Rates>,
     pub span: Duration,
+    pub sockets: Vec<SocketActivity>,
+}
+
+impl Point {
+    pub fn socket(&self, key: &str) -> Option<&SocketActivity> {
+        let index = self.sockets.binary_search_by(|socket| socket.key.as_str().cmp(key)).ok()?;
+        self.sockets.get(index)
+    }
 }
 
 #[derive(Default)]
@@ -179,7 +254,7 @@ pub struct TrafficHistory {
 }
 
 impl TrafficHistory {
-    fn record(&mut self, now: Instant, counters: io::Result<Counters>) -> TrafficState {
+    fn record(&mut self, now: Instant, counters: io::Result<Counters>, sockets: Vec<SocketActivity>) -> TrafficState {
         let span = self.previous.as_ref().map_or(Duration::ZERO, |(then, _)| now.saturating_duration_since(*then));
         let state = match counters {
             Ok(counters) if !counters.is_empty() => {
@@ -206,7 +281,7 @@ impl TrafficHistory {
             TrafficState::Measured { rates, .. } => Some(rates),
             _ => None,
         };
-        self.points.push_back(Point { at: now, rates, span });
+        self.points.push_back(Point { at: now, rates, span, sockets });
         while self.points.front().is_some_and(|point| now.duration_since(point.at) > GRAPH_WINDOW) {
             self.points.pop_front();
         }
@@ -217,6 +292,34 @@ impl TrafficHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn tcp_activity_counts_changed_connections_at_the_same_total_and_expires() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let observe = |history: &mut TcpActivity, now| {
+            let mut ports = ports::list().unwrap();
+            history.update(now, &mut ports);
+            let listener = ports.into_iter().find(|port| {
+                port.endpoint.port == address.port() && port.endpoint.address == address.ip()
+                    && port.endpoint.pid == std::process::id() && port.endpoint.protocol == Protocol::Tcp
+            }).unwrap();
+            (listener.established.len(), listener.recent_tcp)
+        };
+        let mut history = TcpActivity::default();
+        let start = Instant::now();
+        let first = TcpStream::connect(address).unwrap();
+        let (first_peer, _) = listener.accept().unwrap();
+        assert_eq!(observe(&mut history, start), (1, None));
+        let second = TcpStream::connect(address).unwrap();
+        let (second_peer, _) = listener.accept().unwrap();
+        drop((first, first_peer));
+        assert_eq!(observe(&mut history, start + POLL_INTERVAL), (1, Some(1)));
+        assert_eq!(observe(&mut history, start + POLL_INTERVAL * 2), (1, Some(1)));
+        assert_eq!(observe(&mut history, start + TCP_ACTIVITY_WINDOW + POLL_INTERVAL), (1, Some(0)));
+        drop((second, second_peer));
+    }
 
     #[test]
     fn windows_interface_counters_are_readable() {

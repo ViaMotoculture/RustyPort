@@ -34,3 +34,24 @@
   Rustfmt et Clippy sont absents de cette toolchain.
 - La copie Git de publication est dans `.publication` dans l'espace local.
   La tentative de push à blanc a échoué à la connexion HTTPS vers GitHub.
+
+## 2026-11-24 - Actions groupées et historique
+
+- Windows, Rust 1.99.0, cible `x86_64-pc-windows-gnu`. Les 13 tests
+  `cargo test --locked`, `cargo check --all-targets --locked` et
+  `cargo build --release --locked` ont réussi.
+- La liste Win32 a conservé la sélection groupée au tri et traité Ctrl+A,
+  Ctrl+clic et le glisser. Les essais ont couvert les nouvelles connexions
+  TCP, les repères de niveau, le dialogue de durée et la requête web encodée.
+- La pause a gardé le relevé affiché pendant la collecte. La lecture d'une
+  page ancienne, l'export CSV borné et la suppression des deux fichiers
+  temporaires à la fermeture de leurs handles ont été vérifiés. L'interface
+  native démarre à 500 ms et ouvre les fichiers d'archive uniquement après
+  activation.
+- Le binaire a rejeté un lot d'arrêt mal formé avant d'agir et a arrêté
+  deux processus de test après validation de leur identité. L'invite UAC
+  réelle et l'expiration d'une règle réelle de pare-feu restent à vérifier.
+- Windows a signalé VPBA en écoute sur `127.0.0.1:8514/TCP` et une
+  requête locale a reçu HTTP 200. L'Explorateur a trouvé le groupe d'icônes
+  dans le binaire livré. Son SHA-256 est
+  `83180C58851738A363FB446DF5F8C0BAD71D26DB51B23051DDE650E39E544C6B`.

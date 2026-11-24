@@ -64,13 +64,20 @@ Les actions dans OpenPort
   Retirer le blocage et choisis TCP ou UDP.
 • Le clic droit sur une ligne donne accès aux mêmes actions. « Terminer
   et bloquer » arrête le processus après confirmation du blocage par Windows.
-• « Durée (min) » s'applique aux actions temporaires. Windows programme le
+• Les actions « pendant X minutes » demandent la durée au clic. Le bouton
+  Annuler ferme la saisie. Windows programme le
   retrait de la règle de blocage, même si OpenPort quitte. Si le PC est
   arrêté à l'échéance, le Planificateur de tâches reprend le retrait après
   le redémarrage. Les autres règles de pare-feu continuent de s'appliquer.
+  Pour retirer un blocage en cours, sélectionne le port ou saisis son numéro
+  dans le filtre, puis utilise « Retirer le blocage ».
 • La surveillance des relances arrête les nouvelles instances du même
   exécutable au relevé suivant. Sélectionne une durée ou « jusqu'à Quitter ».
   Le menu « Relances » permet de réautoriser chaque application surveillée.
+• Une action d'arrêt grisée peut indiquer un processus système ou un PID
+  que Windows ne permet pas de vérifier. Le détail affiche la cause.
+  Si Windows refuse le droit de terminer un processus au moment de l'arrêt,
+  OpenPort demande une élévation et vérifie de nouveau son identité.
 
 Règles du Pare-feu Windows — https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/rules
 
@@ -80,7 +87,22 @@ Clique sur un en-tête pour trier, puis une seconde fois pour inverser le
 tri. La flèche indique le sens. La liste démarre avec les ports à risque
 en haut. Le menu des niveaux filtre cette liste et peut se combiner avec
 la recherche. Le menu « Relevé » règle la cadence de 250 ms à 10 s,
-avec 2 s par défaut. Les durées réelles varient selon le temps de collecte.
+avec 500 ms par défaut. Les durées réelles varient selon le temps de collecte.
+
+« TCP établies » trie par nombre de connexions au relevé courant.
+« Nouv. TCP / 60 s » trie par nouvelles connexions observées durant
+la dernière minute. Le premier relevé sert de point de départ.
+L'activité entre deux relevés peut être manquée.
+
+Ctrl+A sélectionne les lignes affichées quand le tableau a le focus.
+Ctrl+clic ajoute ou retire une ligne. Glisse sur les lignes pour sélectionner
+une plage. La sélection est conservée pendant le tri et les relevés tant
+que les lignes restent visibles. Le clic droit propose « Plus d'infos » et
+« Rechercher sur le web ». La recherche s'ouvre dans le navigateur par
+défaut avec le nom du programme, le port et le protocole. Avec plusieurs
+lignes, OpenPort affiche la liste des cibles avant la recherche groupée
+ou les actions d'arrêt, de relance et de pare-feu. Les règles et les PID
+identiques sont regroupés.
 
   À risque  Port habituel d'un service sensible, lié au réseau.
   Inconnu   Identité indisponible ou usage réseau à confirmer.
@@ -90,6 +112,7 @@ avec 2 s par défaut. Les durées réelles varient selon le temps de collecte.
 Le détail affiche la raison du niveau. Ce classement décrit des indices
 d'identité et d'exposition locale. Le pare-feu et la configuration du
 réseau déterminent quels appareils peuvent effectivement se connecter.
+Les repères vert, ambre et rouge accompagnent les libellés dans le tableau.
 
 « Vu depuis » mesure le temps depuis la première observation continue
 dans cette session. Le détail affiche aussi l'âge du processus si
@@ -103,9 +126,23 @@ correspond à un intervalle mesuré. Un intervalle indisponible laisse un
 trou dans le graphique. Les débits sont globaux. Le détail UDP indique
 que l'activité par port est indisponible.
 
-Survole une mesure sur le graphique pour lire ses débits et la durée de
-l'intervalle. La croix masque la fenêtre. Un clic sur l'icône OpenPort près
-de l'horloge rouvre la fenêtre. Son menu donne aussi accès à « Quitter ».
+Survole le graphique pour lire les débits ou les connexions TCP du relevé,
+le nom du processus, le port et un correspondant quand il est disponible.
+« Courbes des ports sélectionnés » trace une courbe par port TCP sélectionné.
+Elle mesure le nombre de connexions établies. Le graphique des interfaces
+mesure les octets reçus et envoyés à l'échelle des interfaces.
+
+« Pause graphe » fige la vue pendant les relevés. Coche « Archivage sur
+disque » pour enregistrer les prochains relevés. La case est décochée
+au lancement. La barre d'historique parcourt les pages enregistrées et
+l'espace utilisé est affiché près des commandes d'archive. Décoche la
+case pour suspendre les nouvelles écritures. « Nettoyer » efface les relevés temporaires après
+confirmation. Les commandes de sauvegarde exportent toute la session ou
+une période au format CSV. Les bornes de période sont relatives au lancement.
+
+La croix masque la fenêtre. Un clic sur l'icône OpenPort près de l'horloge
+ou un nouveau lancement rouvre la fenêtre. « Quitter » termine l'application
+et supprime les fichiers temporaires de la session.
 
 Tables des connexions TCP Windows — https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable
 Compteurs réseau Windows — https://learn.microsoft.com/en-us/windows/win32/api/netioapi/ns-netioapi-mib_if_row2

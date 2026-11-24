@@ -28,11 +28,11 @@ impl Entry {
     }
 
     pub fn key(&self) -> PortKey {
-        (self.port.endpoint, self.port.owner.created)
+        self.port.key()
     }
 
     fn tcp_connections(&self) -> Option<usize> {
-        (self.port.endpoint.protocol == Protocol::Tcp).then_some(self.port.established)
+        (self.port.endpoint.protocol == Protocol::Tcp).then_some(self.port.established.len())
     }
 }
 
@@ -46,9 +46,10 @@ pub enum Column {
     Pid,
     Seen,
     Connections,
+    RecentTcp,
 }
 
-pub const COLUMNS: [(Column, &str, i32); 8] = [
+pub const COLUMNS: [(Column, &str, i32); 9] = [
     (Column::Risk, "Niveau", 90),
     (Column::Port, "Port", 64),
     (Column::Protocol, "Protocole", 77),
@@ -57,6 +58,7 @@ pub const COLUMNS: [(Column, &str, i32); 8] = [
     (Column::Pid, "PID", 66),
     (Column::Seen, "Vu depuis", 94),
     (Column::Connections, "TCP établies", 107),
+    (Column::RecentTcp, "Nouv. TCP / 60 s", 119),
 ];
 
 #[derive(Clone, Copy)]
@@ -76,7 +78,7 @@ impl Sort {
         let descending = if self.column == column {
             !self.descending
         } else {
-            matches!(column, Column::Risk | Column::Seen | Column::Connections)
+            matches!(column, Column::Risk | Column::Seen | Column::Connections | Column::RecentTcp)
         };
         Self { column, descending }
     }
@@ -92,7 +94,11 @@ impl Sort {
             Column::Process => a.name.cmp(&b.name),
             Column::Pid => a_socket.pid.cmp(&b_socket.pid),
             Column::Seen => b.first_seen.cmp(&a.first_seen),
-            Column::Connections => match (a.tcp_connections(), b.tcp_connections()) {
+            Column::Connections | Column::RecentTcp => match if self.column == Column::Connections {
+                (a.tcp_connections(), b.tcp_connections())
+            } else {
+                (a.port.recent_tcp, b.port.recent_tcp)
+            } {
                 (Some(a), Some(b)) => a.cmp(&b),
                 (Some(_), None) => return Ordering::Less,
                 (None, Some(_)) => return Ordering::Greater,
@@ -132,6 +138,7 @@ pub fn visible_rows(ports: &[Entry], query: &str, filter: Option<Risk>, sort: So
                 endpoint.pid.to_string(),
                 duration_label(at.saturating_duration_since(entry.first_seen)),
                 entry.tcp_connections().map_or_else(|| "—".into(), |count| count.to_string()),
+                port.recent_tcp.map_or_else(|| "—".into(), |count| count.to_string()),
             ],
         }
     }).collect()
