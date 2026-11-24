@@ -89,6 +89,8 @@
 
 ## À valider
 
+- Vérifier en compte autorisé la collecte du débit TCP et UDP en
+  réception et en émission sur les ports sélectionnés.
 - Exécuter sur un poste Windows avec droits d'administration un blocage
   temporaire sur un port de test et vérifier son expiration.
 - Vérifier l'invite UAC du nouvel arrêt sur un processus de test qui demande

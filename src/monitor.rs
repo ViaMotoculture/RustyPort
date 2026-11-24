@@ -1,16 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ptr::{addr_of, null_mut};
-use std::sync::{Arc, Mutex, MutexGuard, atomic::{AtomicU64, Ordering}, mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError}};
-use std::thread;
+use std::sync::{Arc, Mutex, MutexGuard, atomic::{AtomicBool, AtomicU64, Ordering}, mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError}};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::NO_ERROR;
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_PRIVILEGE_NOT_HELD, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     FreeMibTable, GetIfTable2, IF_TYPE_SOFTWARE_LOOPBACK, MIB_IF_ROW2, MIB_IF_TABLE2,
 };
 use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 
+use crate::port_traffic::{ByteCount, PortCapture, PortSocket, PortWindow};
 use crate::ports::{self, Endpoint, Port, Protocol, TcpConnection};
 use crate::relaunch::{self, Watch};
 
@@ -70,31 +72,145 @@ pub struct Reading {
     pub at: Instant,
     pub ports: io::Result<Vec<Port>>,
     interfaces: io::Result<Counters>,
+    port_state: PortTrafficState,
+    port_window: Option<PortWindow>,
 }
 
 impl Reading {
-    pub fn apply(self, history: &mut TrafficHistory) -> (Instant, io::Result<Vec<Port>>, TrafficState) {
-        let mut sockets = self.ports.as_deref().unwrap_or_default().iter()
-            .filter(|port| port.endpoint.protocol == Protocol::Tcp)
+    pub fn apply(self, history: &mut TrafficHistory) -> (Instant, io::Result<Vec<Port>>, TrafficState, PortTrafficState) {
+        let ports = self.ports.as_deref().unwrap_or_default();
+        if self.ports.is_err() || !matches!(self.port_state, PortTrafficState::Measuring | PortTrafficState::Starting) {
+            history.port_keys.clear();
+        }
+        let port_span = self.port_window.as_ref().map(|window| window.span);
+        let rates = self.port_window.map(|window| {
+            let rates = window.entries.map_or_else(BTreeMap::new, |entries| {
+                attribute_port_rates(ports, &history.port_keys, &entries, window.span)
+            });
+            history.port_keys = ports.iter().map(Port::key).collect();
+            rates
+        }).unwrap_or_default();
+        let mut sockets = ports.iter()
+            .filter(|port| port.endpoint.protocol == Protocol::Tcp || port_span.is_some())
             .map(|port| SocketActivity {
                 key: port.graph_key(),
                 name: port.owner.name.clone(),
                 endpoint: port.endpoint.label(),
                 address: port.endpoint.address_label(),
                 peer: port.established.iter().next().map_or_else(String::new, |peer| peer.peer_label()),
+                protocol: port.endpoint.protocol,
+                port_rates: rates.get(&port.key()).copied(),
                 established: port.established.len() as u32,
                 arrivals: port.tcp_arrivals,
             }).collect::<Vec<_>>();
         sockets.sort_unstable_by(|a, b| a.key.cmp(&b.key));
-        (self.at, self.ports, history.record(self.at, self.interfaces, sockets))
+        let traffic = history.record(self.at, self.interfaces, port_span, sockets);
+        (self.at, self.ports, traffic, self.port_state)
+    }
+}
+
+type PortKey = (Endpoint, Option<u64>);
+
+fn socket_key(endpoint: Endpoint) -> PortSocket {
+    PortSocket { pid: endpoint.pid, protocol: endpoint.protocol, address: endpoint.address, port: endpoint.port }
+}
+
+fn attribute_port_rates(
+    ports: &[Port], previous: &BTreeSet<PortKey>, bytes: &BTreeMap<PortSocket, ByteCount>, span: Duration,
+) -> BTreeMap<PortKey, Rates> {
+    if span.is_zero() {
+        return BTreeMap::new();
+    }
+    let mut listeners = BTreeMap::new();
+    for port in ports.iter().filter(|port| port.endpoint.pid != 0 && port.endpoint.port != 0) {
+        listeners.entry(socket_key(port.endpoint)).and_modify(|owner| *owner = None).or_insert(Some(port.key()));
+    }
+    // A port must be present at both sample boundaries. Multiple interfaces with the
+    // same IPv6 address cannot be distinguished when ETW does not report the scope.
+    let mut totals = listeners.values().flatten().copied()
+        .filter(|key| previous.contains(key) && (key.1.is_some() || key.0.pid == 4))
+        .map(|key| (key, ByteCount::default())).collect::<BTreeMap<_, _>>();
+    for (socket, count) in bytes {
+        let address = match socket.address {
+            IpAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
+            IpAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
+        };
+        let owner = listeners.get(socket).or_else(|| listeners.get(&PortSocket { address, ..*socket }));
+        if let Some(Some(owner)) = owner && let Some(total) = totals.get_mut(owner) {
+            total.received = total.received.saturating_add(count.received);
+            total.sent = total.sent.saturating_add(count.sent);
+        }
+    }
+    let seconds = span.as_secs_f64();
+    totals.into_iter().map(|(key, count)| {
+        (key, Rates { received: count.received as f64 / seconds, sent: count.sent as f64 / seconds })
+    }).collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PortTrafficState {
+    Off,
+    Starting,
+    Measuring,
+    AccessDenied,
+    Unavailable,
+}
+
+#[derive(Default)]
+struct PortSampler {
+    capture: Option<PortCapture>,
+    failure: Option<PortTrafficState>,
+    measuring: bool,
+}
+
+impl PortSampler {
+    fn read(&mut self, enabled: bool) -> (PortTrafficState, Option<PortWindow>) {
+        if !enabled {
+            self.capture = None;
+            self.failure = None;
+            self.measuring = false;
+            return (PortTrafficState::Off, None);
+        }
+        if let Some(failure) = self.failure {
+            return (failure, None);
+        }
+        let result = match self.capture.as_mut() {
+            Some(capture) => capture.sample(),
+            None => PortCapture::open().map(|capture| {
+                self.capture = Some(capture);
+                None
+            }),
+        };
+        match result {
+            Ok(window @ Some(_)) => {
+                self.measuring = true;
+                (PortTrafficState::Measuring, window)
+            }
+            Ok(None) if self.measuring => (PortTrafficState::Measuring, None),
+            Ok(None) => (PortTrafficState::Starting, None),
+            Err(error) => {
+                self.capture = None;
+                let code = error.raw_os_error().map(|code| code as u32);
+                let failure = if matches!(code, Some(ERROR_ACCESS_DENIED | ERROR_PRIVILEGE_NOT_HELD)) {
+                    PortTrafficState::AccessDenied
+                } else {
+                    PortTrafficState::Unavailable
+                };
+                self.failure = Some(failure);
+                (failure, None)
+            }
+        }
     }
 }
 
 pub struct Monitor {
     refresh: SyncSender<()>,
-    readings: Receiver<Reading>,
+    readings: Option<Receiver<Reading>>,
     interval_ms: Arc<AtomicU64>,
     watches: Arc<Mutex<Vec<Watch>>>,
+    port_capture: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl Monitor {
@@ -105,18 +221,24 @@ impl Monitor {
         let interval = Arc::clone(&interval_ms);
         let watches = Arc::new(Mutex::new(Vec::new()));
         let monitored = Arc::clone(&watches);
-        thread::Builder::new().name("rustyport-monitor".into()).spawn(move || {
+        let port_capture = Arc::new(AtomicBool::new(false));
+        let requested = Arc::clone(&port_capture);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&shutdown);
+        let worker = thread::Builder::new().name("rustyport-monitor".into()).spawn(move || {
             let mut tcp_activity = TcpActivity::default();
-            loop {
+            let mut port_sampler = PortSampler::default();
+            while !stopped.load(Ordering::Relaxed) {
                 relaunch::enforce(&mut lock_watches(&monitored));
                 let mut ports = ports::list();
                 let interfaces = read_interfaces();
+                let (port_state, port_window) = port_sampler.read(requested.load(Ordering::Relaxed));
                 let at = Instant::now();
                 match &mut ports {
                     Ok(ports) => tcp_activity.update(at, ports),
                     Err(_) => tcp_activity.listeners.clear(),
                 }
-                let reading = Reading { at, ports, interfaces };
+                let reading = Reading { at, ports, interfaces, port_state, port_window };
                 if publish.send(reading).is_err()
                     || requests.recv_timeout(Duration::from_millis(interval.load(Ordering::Relaxed))) == Err(RecvTimeoutError::Disconnected)
                 {
@@ -124,7 +246,7 @@ impl Monitor {
                 }
             }
         })?;
-        Ok(Self { refresh, readings, interval_ms, watches })
+        Ok(Self { refresh, readings: Some(readings), interval_ms, watches, port_capture, shutdown, worker: Some(worker) })
     }
 
     pub fn set_interval(&self, milliseconds: u64) {
@@ -134,6 +256,12 @@ impl Monitor {
 
     pub fn refresh(&self) -> bool {
         !matches!(self.refresh.try_send(()), Err(TrySendError::Disconnected(_)))
+    }
+
+    pub fn set_port_capture(&self, enabled: bool) {
+        if self.port_capture.swap(enabled, Ordering::Relaxed) != enabled {
+            self.refresh();
+        }
     }
 
     pub fn watch(&self, watch: Watch) {
@@ -157,10 +285,21 @@ impl Monitor {
     }
 
     pub fn poll(&self) -> Result<Option<Reading>, TryRecvError> {
-        match self.readings.try_recv() {
+        match self.readings.as_ref().ok_or(TryRecvError::Disconnected)?.try_recv() {
             Ok(reading) => Ok(Some(reading)),
             Err(TryRecvError::Empty) => Ok(None),
             Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for Monitor {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        self.readings.take();
+        self.refresh();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
     }
 }
@@ -231,6 +370,8 @@ pub struct SocketActivity {
     pub endpoint: String,
     pub address: String,
     pub peer: String,
+    pub protocol: Protocol,
+    pub port_rates: Option<Rates>,
     pub established: u32,
     pub arrivals: Option<u32>,
 }
@@ -240,6 +381,7 @@ pub struct Point {
     pub at: Instant,
     pub rates: Option<Rates>,
     pub span: Duration,
+    pub port_span: Option<Duration>,
     pub sockets: Vec<SocketActivity>,
 }
 
@@ -253,11 +395,12 @@ impl Point {
 #[derive(Default)]
 pub struct TrafficHistory {
     previous: Option<(Instant, Counters)>,
+    port_keys: BTreeSet<PortKey>,
     pub points: VecDeque<Point>,
 }
 
 impl TrafficHistory {
-    fn record(&mut self, now: Instant, counters: io::Result<Counters>, sockets: Vec<SocketActivity>) -> TrafficState {
+    fn record(&mut self, now: Instant, counters: io::Result<Counters>, port_span: Option<Duration>, sockets: Vec<SocketActivity>) -> TrafficState {
         let span = self.previous.as_ref().map_or(Duration::ZERO, |(then, _)| now.saturating_duration_since(*then));
         let state = match counters {
             Ok(counters) if !counters.is_empty() => {
@@ -284,7 +427,7 @@ impl TrafficHistory {
             TrafficState::Measured { rates, .. } => Some(rates),
             _ => None,
         };
-        self.points.push_back(Point { at: now, rates, span, sockets });
+        self.points.push_back(Point { at: now, rates, span, port_span, sockets });
         while self.points.front().is_some_and(|point| now.duration_since(point.at) > GRAPH_WINDOW) {
             self.points.pop_front();
         }
@@ -295,7 +438,53 @@ impl TrafficHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{TcpListener, TcpStream, UdpSocket};
+
+    #[test]
+    fn byte_windows_keep_two_ports_distinct_and_preserve_zero_and_gaps() {
+        let tcp_local = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let tcp_wildcard = TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let udp = UdpSocket::bind(("127.0.0.1", 0)).unwrap();
+        let endpoints = [
+            (Protocol::Tcp, tcp_local.local_addr().unwrap().port()),
+            (Protocol::Tcp, tcp_wildcard.local_addr().unwrap().port()),
+            (Protocol::Udp, udp.local_addr().unwrap().port()),
+        ];
+        let ports: Vec<_> = ports::list().unwrap().into_iter().filter(|port| {
+            port.endpoint.pid == std::process::id()
+                && endpoints.contains(&(port.endpoint.protocol, port.endpoint.port))
+        }).collect();
+        assert_eq!(ports.len(), 3);
+        let port = |index| ports.iter()
+            .find(|port| (port.endpoint.protocol, port.endpoint.port) == endpoints[index]).unwrap();
+        let local = socket_key(port(0).endpoint);
+        let wildcard = PortSocket { address: Ipv4Addr::LOCALHOST.into(), ..socket_key(port(1).endpoint) };
+        let bytes = BTreeMap::from([
+            (local, ByteCount { received: 2048, sent: 4096 }),
+            (wildcard, ByteCount { received: 8192, sent: 512 }),
+        ]);
+        let mut history = TrafficHistory::default();
+        let start = Instant::now();
+        let span = Duration::from_secs(2);
+        let mut record = |step, entries| {
+            let (_, reading_ports, _, _) = Reading {
+                at: start + span * step, ports: Ok(ports.clone()), interfaces: Ok(HashMap::new()),
+                port_state: PortTrafficState::Measuring,
+                port_window: Some(PortWindow { span, entries }),
+            }.apply(&mut history);
+            assert!(reading_ports.is_ok());
+            let sample = history.points.back().unwrap();
+            assert_eq!(sample.port_span, Some(span));
+            [0, 1, 2].map(|index| sample.socket(&port(index).graph_key()).unwrap().port_rates)
+        };
+        assert_eq!(record(1, Some(bytes.clone())), [None, None, None]);
+        assert_eq!(record(2, Some(bytes)), [
+            Some(Rates { received: 1024.0, sent: 2048.0 }),
+            Some(Rates { received: 4096.0, sent: 256.0 }),
+            Some(Rates { received: 0.0, sent: 0.0 }),
+        ]);
+        assert_eq!(record(3, None), [None, None, None]);
+    }
 
     #[test]
     fn tcp_activity_counts_changed_connections_at_the_same_total_and_expires() {
@@ -305,8 +494,10 @@ mod tests {
         let mut observe = |history: &mut TcpActivity, now| {
             let mut ports = ports::list().unwrap();
             history.update(now, &mut ports);
-            let (_, ports, _) = Reading { at: now, ports: Ok(ports), interfaces: Ok(HashMap::new()) }
-                .apply(&mut samples);
+            let (_, ports, _, _) = Reading {
+                at: now, ports: Ok(ports), interfaces: Ok(HashMap::new()),
+                port_state: PortTrafficState::Off, port_window: None,
+            }.apply(&mut samples);
             let listener = ports.unwrap().into_iter().find(|port| {
                 port.endpoint.port == address.port() && port.endpoint.address == address.ip()
                     && port.endpoint.pid == std::process::id() && port.endpoint.protocol == Protocol::Tcp

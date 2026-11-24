@@ -7,7 +7,7 @@ use windows_sys::Win32::UI::Accessibility::{HIGHCONTRASTW, HCF_HIGHCONTRASTON};
 use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SystemParametersInfoW};
 
 use crate::monitor::{GRAPH_WINDOW, Point, SocketActivity};
-use crate::ports::wide;
+use crate::ports::{Protocol, wide};
 
 pub const RECEIVED_COLOR: COLORREF = rgb(87, 219, 191);
 pub const SENT_COLOR: COLORREF = rgb(129, 175, 253);
@@ -45,24 +45,27 @@ pub struct Series {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum TcpMetric {
+pub enum PortMetric {
+    Rates,
     Arrivals,
     Established,
 }
 
-impl TcpMetric {
-    fn value(self, socket: &SocketActivity) -> Option<u32> {
+impl PortMetric {
+    fn value(self, socket: &SocketActivity) -> Option<f64> {
         match self {
-            Self::Arrivals => socket.arrivals,
-            Self::Established => Some(socket.established),
+            Self::Rates => socket.port_rates.map(|rates| rates.received + rates.sent),
+            Self::Arrivals if socket.protocol == Protocol::Tcp => socket.arrivals.map(f64::from),
+            Self::Established if socket.protocol == Protocol::Tcp => Some(f64::from(socket.established)),
+            _ => None,
         }
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct TcpSelection<'a> {
+pub struct PortSelection<'a> {
     pub series: &'a [Series],
-    pub metric: TcpMetric,
+    pub metric: PortMetric,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -72,7 +75,7 @@ pub struct SelectionStats {
     pub no_data: usize,
 }
 
-pub fn selection_stats(points: &VecDeque<Point>, selection: TcpSelection) -> SelectionStats {
+pub fn selection_stats(points: &VecDeque<Point>, selection: PortSelection) -> SelectionStats {
     let mut stats = SelectionStats::default();
     for (_, peak) in selected_peaks(points, selection) {
         stats.observe(peak);
@@ -81,9 +84,9 @@ pub fn selection_stats(points: &VecDeque<Point>, selection: TcpSelection) -> Sel
 }
 
 impl SelectionStats {
-    fn observe(&mut self, peak: Option<u32>) {
+    fn observe(&mut self, peak: Option<f64>) {
         match peak {
-            Some(0) => self.zero += 1,
+            Some(0.0) => self.zero += 1,
             Some(_) => self.active += 1,
             None => self.no_data += 1,
         }
@@ -95,7 +98,7 @@ pub fn plot(bounds: RECT, selection: bool) -> RECT {
         top: bounds.top + 16, bottom: bounds.bottom - 24 }
 }
 
-fn tcp_plot(plot: RECT) -> RECT {
+fn series_plot(plot: RECT) -> RECT {
     RECT { top: plot.top + 5, bottom: plot.bottom - 4, ..plot }
 }
 
@@ -108,51 +111,65 @@ fn y_position(plot: RECT, scale: f64, value: f64) -> i32 {
     plot.bottom - (value / scale * f64::from(plot.bottom - plot.top)).round() as i32
 }
 
-pub fn sample_at(points: &VecDeque<Point>, bounds: RECT, selection: bool, x: i32) -> Option<&Point> {
-    let plot = plot(bounds, selection);
+fn samples_for(points: &VecDeque<Point>, selection: Option<PortMetric>) -> impl DoubleEndedIterator<Item = &Point> {
+    points.iter().filter(move |point| selection != Some(PortMetric::Rates) || point.port_span.is_some())
+}
+
+pub fn sample_at(points: &VecDeque<Point>, bounds: RECT, selection: Option<PortMetric>, x: i32) -> Option<&Point> {
+    let plot = plot(bounds, selection.is_some());
     let latest = points.back()?;
-    let leftmost = sample_x(plot, latest, points.front()?);
+    let samples = || samples_for(points, selection);
+    let leftmost = sample_x(plot, latest, samples().next()?);
     if !(leftmost..=plot.right).contains(&x) {
         return None;
     }
-    points.iter().rev().min_by_key(|point| sample_x(plot, latest, point).abs_diff(x))
+    samples().rev().min_by_key(|point| sample_x(plot, latest, point).abs_diff(x))
 }
 
-fn series_value(point: &Point, series: &Series, metric: TcpMetric) -> Option<f64> {
-    point.socket(&series.key).and_then(|socket| metric.value(socket)).map(f64::from)
+fn series_value(point: &Point, series: &Series, metric: PortMetric) -> Option<f64> {
+    point.socket(&series.key).and_then(|socket| metric.value(socket))
 }
 
-fn selected_peaks<'a>(points: &'a VecDeque<Point>, selection: TcpSelection<'a>)
-    -> impl Iterator<Item = (&'a Series, Option<u32>)> + 'a
+fn selected_peaks<'a>(points: &'a VecDeque<Point>, selection: PortSelection<'a>)
+    -> impl Iterator<Item = (&'a Series, Option<f64>)> + 'a
 {
     selection.series.iter().map(move |series| {
-        let peak = points.iter().filter_map(|point| point.socket(&series.key))
-            .filter_map(|socket| selection.metric.value(socket)).max();
+        let peak = samples_for(points, Some(selection.metric)).filter_map(|point| series_value(point, series, selection.metric))
+            .reduce(f64::max);
         (series, peak)
     })
 }
 
-fn tcp_scale(peak: Option<u32>) -> f64 {
-    (f64::from(peak.unwrap_or(0)) * 1.1).ceil().max(2.0)
+fn series_scale(metric: PortMetric, peak: Option<f64>) -> f64 {
+    let ceiling = peak.unwrap_or(0.0) * 1.1;
+    match metric {
+        PortMetric::Rates => ceiling.max(1.0),
+        _ => ceiling.ceil().max(2.0),
+    }
 }
 
 pub fn hovered_sockets<'a>(
-    point: &'a Point, points: &VecDeque<Point>, bounds: RECT, selection: Option<TcpSelection<'_>>, y: i32,
+    point: &'a Point, points: &VecDeque<Point>, bounds: RECT, selection: Option<PortSelection<'_>>, y: i32,
 ) -> Vec<&'a SocketActivity> {
     if let Some(selection) = selection {
-        let plot = tcp_plot(plot(bounds, true));
-        let scale = tcp_scale(selected_peaks(points, selection).filter_map(|(_, peak)| peak).max());
+        if selection.metric == PortMetric::Rates && point.port_span.is_none() {
+            return Vec::new();
+        }
+        let plot = series_plot(plot(bounds, true));
+        let peak = selected_peaks(points, selection).filter_map(|(_, peak)| peak).reduce(f64::max);
+        let scale = series_scale(selection.metric, peak);
         let positioned = || selection.series.iter().rev().filter_map(|series| {
             let socket = point.socket(&series.key)?;
             let value = selection.metric.value(socket)?;
-            Some((socket, y_position(plot, scale, f64::from(value))))
+            Some((socket, y_position(plot, scale, value)))
         });
         let Some(nearest) = positioned().map(|(_, height)| height).min_by_key(|position| position.abs_diff(y)) else {
             return Vec::new();
         };
         positioned().filter_map(|(socket, height)| (height == nearest).then_some(socket)).collect()
     } else {
-        point.sockets.iter().filter(|socket| socket.established > 0).max_by_key(|socket| socket.established)
+        point.sockets.iter().filter(|socket| socket.protocol == Protocol::Tcp && socket.established > 0)
+            .max_by_key(|socket| socket.established)
             .into_iter().collect()
     }
 }
@@ -168,7 +185,7 @@ fn series_color(index: usize) -> COLORREF {
 
 pub fn paint(
     dc: HDC, font: HFONT, bounds: RECT, points: &VecDeque<Point>, pointer: Option<i32>,
-    selection: Option<TcpSelection<'_>>, paused: bool,
+    selection: Option<PortSelection<'_>>, paused: bool,
 ) {
     let high_contrast = high_contrast();
     let (background, grid, text, received, sent) = if high_contrast {
@@ -179,16 +196,17 @@ pub fn paint(
     } else {
         (rgb(19, 38, 44), rgb(47, 75, 82), rgb(203, 225, 229), RECEIVED_COLOR, SENT_COLOR)
     };
-    let selected = selection.map(|series| selected_peaks(points, series).collect::<Vec<_>>());
-    let scale = if let Some(selected) = &selected {
-        tcp_scale(selected.iter().filter_map(|(_, peak)| *peak).max())
+    let selected = selection.map(|selection| selected_peaks(points, selection).collect::<Vec<_>>());
+    let metric = selection.map(|selection| selection.metric);
+    let scale = if let Some((metric, selected)) = metric.zip(selected.as_ref()) {
+        series_scale(metric, selected.iter().filter_map(|(_, peak)| *peak).reduce(f64::max))
     } else {
         points.iter().filter_map(|point| point.rates)
             .map(|rate| rate.received.max(rate.sent)).fold(1.0, f64::max)
     };
-    let hovered_point = pointer.and_then(|x| sample_at(points, bounds, selection.is_some(), x));
+    let hovered_point = pointer.and_then(|x| sample_at(points, bounds, metric, x));
     let plot = plot(bounds, selection.is_some());
-    let data_plot = if selection.is_some() { tcp_plot(plot) } else { plot };
+    let data_plot = if selection.is_some() { series_plot(plot) } else { plot };
     let hovered = hovered_point.zip(points.back()).map(|(point, latest)| (point, sample_x(plot, latest, point)));
     unsafe {
         if SaveDC(dc) == 0 {
@@ -214,15 +232,16 @@ pub fn paint(
         SelectObject(dc, font);
         SetBkMode(dc, TRANSPARENT as i32);
         SetTextColor(dc, text);
-        let unit = selection.map(|selection| match selection.metric {
-            TcpMetric::Arrivals => "nouv.",
-            TcpMetric::Established => "TCP",
-        });
+        let unit = match metric {
+            Some(PortMetric::Arrivals) => Some("nouv."),
+            Some(PortMetric::Established) => Some("TCP"),
+            _ => None,
+        };
         let top = unit.map_or_else(|| rate_label(scale), |unit| format!("{scale:.0} {unit}"));
         let zero = unit.map_or_else(|| "0 o/s".into(), |unit| format!("0 {unit}"));
         paint_text(dc, bounds.left + 9, data_plot.top - 5, &top);
-        if selection.is_none() && scale >= 2.0 {
-            paint_text(dc, bounds.left + 9, (plot.top + plot.bottom) / 2 - 7, &rate_label(scale / 2.0));
+        if unit.is_none() && scale >= 2.0 {
+            paint_text(dc, bounds.left + 9, (data_plot.top + data_plot.bottom) / 2 - 7, &rate_label(scale / 2.0));
         }
         paint_text(dc, bounds.left + 9, data_plot.bottom - 9, &zero);
         for (step, label) in ["−60 s", "−45 s", "−30 s", "−15 s"].into_iter().enumerate() {
@@ -238,20 +257,23 @@ pub fn paint(
             MoveToEx(dc, x, plot.top, std::ptr::null_mut());
             LineTo(dc, x, plot.bottom + 1);
         }
-        if let Some((selection, selected)) = selection.zip(selected.as_deref()) {
-            let metric = selection.metric;
+        if let Some((metric, selected)) = metric.zip(selected.as_deref()) {
             let mut stats = SelectionStats::default();
             for &(_, peak) in selected {
                 stats.observe(peak);
             }
             let note = if selected.is_empty() {
-                Some("Sélectionnez un ou plusieurs ports TCP dans la liste.")
+                Some(match metric {
+                    PortMetric::Rates => "Sélectionnez un ou plusieurs ports TCP ou UDP dans la liste.",
+                    _ => "Sélectionnez un ou plusieurs ports TCP dans la liste.",
+                })
             } else if stats.zero == 0 && stats.active == 0 {
                 Some("Aucun relevé disponible pour ces ports sur cette période.")
             } else if stats.active == 0 {
                 Some(match metric {
-                    TcpMetric::Arrivals => "Aucune nouvelle connexion TCP observée sur cette période.",
-                    TcpMetric::Established => "Aucune connexion TCP établie observée sur cette période.",
+                    PortMetric::Rates => "Aucun octet observé pour ces ports sur cette période.",
+                    PortMetric::Arrivals => "Aucune nouvelle connexion TCP observée sur cette période.",
+                    PortMetric::Established => "Aucune connexion TCP établie observée sur cette période.",
                 })
             } else {
                 None
@@ -264,12 +286,12 @@ pub fn paint(
             // The shared baseline breaks wherever no zero-only port was measured.
             let zero_color = if high_contrast { text } else { rgb(139, 166, 170) };
             if stats.zero > 0 {
-                let zero_series = selected.iter().filter(|(_, peak)| *peak == Some(0))
+                let zero_series = selected.iter().filter(|(_, peak)| *peak == Some(0.0))
                     .map(|(series, _)| *series).collect::<Vec<_>>();
                 let zero_value = |point: &Point| {
                     zero_series.iter().any(|series| series_value(point, series, metric) == Some(0.0)).then_some(0.0)
                 };
-                draw_series(dc, data_plot, points, scale, zero_color, 1, zero_value);
+                draw_series(dc, data_plot, points, Some(metric), scale, zero_color, 1, zero_value);
                 draw_marker(dc, data_plot, hovered, scale, zero_color, zero_value);
             }
 
@@ -279,15 +301,16 @@ pub fn paint(
             let overflow = stats.active > active_slots && active_slots > 1;
             let listed = stats.active.min(active_slots - usize::from(overflow));
             let legend_start = plot.top - 6;
-            let active = selected.iter().filter(|(_, peak)| peak.is_some_and(|peak| peak > 0));
+            let active = selected.iter().filter(|(_, peak)| peak.is_some_and(|peak| peak > 0.0));
             for (index, (series, _)) in active.enumerate() {
                 let color = if high_contrast { text } else { series_color(index) };
                 let value = |point: &Point| series_value(point, series, metric);
                 match metric {
-                    TcpMetric::Arrivals => draw_stems(dc, data_plot, points, scale, color, value),
-                    TcpMetric::Established => {
-                        draw_series(dc, data_plot, points, scale, color, 2, value);
-                        let last = points.back().map(|point| (point, data_plot.right));
+                    PortMetric::Arrivals => draw_stems(dc, data_plot, points, scale, color, value),
+                    PortMetric::Rates | PortMetric::Established => {
+                        draw_series(dc, data_plot, points, Some(metric), scale, color, 2, value);
+                        let last = samples_for(points, Some(metric)).next_back().zip(points.back())
+                            .map(|(point, latest)| (point, sample_x(data_plot, latest, point)));
                         draw_marker(dc, data_plot, last, scale, color, value);
                     }
                 }
@@ -321,7 +344,7 @@ pub fn paint(
                     point.rates.map(|rates| if is_received { rates.received } else { rates.sent })
                 };
                 paint_legend(dc, bounds, plot.right, plot.top + offset, color, label);
-                draw_series(dc, plot, points, scale, color, 1, value);
+                draw_series(dc, plot, points, None, scale, color, 1, value);
                 draw_marker(dc, plot, hovered, scale, color, value);
             }
         }
@@ -361,7 +384,7 @@ unsafe fn paint_label(dc: HDC, mut rect: RECT, alignment: DRAW_TEXT_FORMAT, labe
 }
 
 unsafe fn draw_series(
-    dc: HDC, plot: RECT, points: &VecDeque<Point>, scale: f64, color: COLORREF, width: i32,
+    dc: HDC, plot: RECT, points: &VecDeque<Point>, metric: Option<PortMetric>, scale: f64, color: COLORREF, width: i32,
     value_at: impl Fn(&Point) -> Option<f64>,
 ) {
     let Some(latest) = points.back() else { return };
@@ -371,7 +394,8 @@ unsafe fn draw_series(
         SetDCBrushColor(dc, color);
         let pen = if width > 1 { CreatePen(PS_SOLID, width, color) } else { std::ptr::null_mut() };
         let old_pen = if pen.is_null() { std::ptr::null_mut() } else { SelectObject(dc, pen) };
-        for point in points {
+        // UI refreshes between capture intervals are skipped, while a sampled loss breaks the line.
+        for point in samples_for(points, metric) {
             let Some(value) = value_at(point) else {
                 previous = None;
                 continue;
@@ -424,6 +448,7 @@ unsafe fn paint_text(dc: HDC, x: i32, y: i32, label: &str) {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+    use crate::monitor::Rates;
 
     #[test]
     fn hover_identifies_overlapping_curves_for_selected_ports() {
@@ -432,32 +457,80 @@ mod tests {
             SocketActivity {
                 key: endpoint.into(), endpoint: endpoint.into(), established, arrivals,
                 name: String::new(), address: String::new(), peer: String::new(),
+                protocol: Protocol::Tcp, port_rates: None,
             }
         });
         let selection = sockets.iter().map(|socket| Series {
             key: socket.key.clone(), label: socket.endpoint.clone(),
         }).collect::<Vec<_>>();
         let points = VecDeque::from([Point {
-            at: Instant::now(), rates: None, span: Duration::ZERO, sockets: sockets.into(),
+            at: Instant::now(), rates: None, span: Duration::ZERO, sockets: sockets.into(), port_span: None,
         }]);
         let point = points.back().unwrap();
         let bounds = RECT { left: 0, top: 0, right: 800, bottom: 150 };
-        let plot = tcp_plot(plot(bounds, true));
-        let ports = |metric, y| hovered_sockets(point, &points, bounds, Some(TcpSelection { series: &selection, metric }), y)
+        let plot = series_plot(plot(bounds, true));
+        let ports = |metric, y| hovered_sockets(point, &points, bounds, Some(PortSelection { series: &selection, metric }), y)
             .into_iter().map(|socket| socket.endpoint.as_str()).collect::<Vec<_>>();
-        assert_eq!(ports(TcpMetric::Established, plot.bottom), ["8514/TCP", "443/TCP"]);
-        assert_eq!(ports(TcpMetric::Established, y_position(plot, tcp_scale(Some(1)), 1.0)), ["9000/TCP"]);
-        assert_eq!(ports(TcpMetric::Arrivals, plot.bottom), ["8514/TCP"]);
-        assert_eq!(ports(TcpMetric::Arrivals, y_position(plot, tcp_scale(Some(3)), 3.0)), ["443/TCP"]);
-        assert!(y_position(plot, tcp_scale(Some(1)), 1.0) > plot.top);
+        let established_scale = series_scale(PortMetric::Established, Some(1.0));
+        let arrivals_scale = series_scale(PortMetric::Arrivals, Some(3.0));
+        assert_eq!(ports(PortMetric::Established, plot.bottom), ["8514/TCP", "443/TCP"]);
+        assert_eq!(ports(PortMetric::Established, y_position(plot, established_scale, 1.0)), ["9000/TCP"]);
+        assert_eq!(ports(PortMetric::Arrivals, plot.bottom), ["8514/TCP"]);
+        assert_eq!(ports(PortMetric::Arrivals, y_position(plot, arrivals_scale, 3.0)), ["443/TCP"]);
+        assert!(y_position(plot, established_scale, 1.0) > plot.top);
 
         let mut selection = selection;
         selection.push(Series { key: "missing".into(), label: "Sans relevé".into() });
-        let established = TcpSelection { series: &selection, metric: TcpMetric::Established };
-        let arrivals = TcpSelection { series: &selection, metric: TcpMetric::Arrivals };
+        let established = PortSelection { series: &selection, metric: PortMetric::Established };
+        let arrivals = PortSelection { series: &selection, metric: PortMetric::Arrivals };
         assert_eq!(selection_stats(&points, established), SelectionStats { active: 1, zero: 2, no_data: 1 });
         assert_eq!(selection_stats(&points, arrivals), SelectionStats { active: 1, zero: 1, no_data: 2 });
         assert_eq!(selection_stats(&VecDeque::new(), established), SelectionStats { active: 0, zero: 0, no_data: 4 });
-        assert_eq!(series_value(point, selection.last().unwrap(), TcpMetric::Established), None);
+        assert_eq!(series_value(point, selection.last().unwrap(), PortMetric::Established), None);
+    }
+
+    #[test]
+    fn rate_curves_keep_measured_windows_and_break_at_sampled_losses() {
+        let start = Instant::now();
+        let reading = |seconds, sampled: bool, tcp, udp| Point {
+            at: start + Duration::from_secs(seconds),
+            span: Duration::from_secs(1),
+            rates: None,
+            port_span: sampled.then_some(Duration::from_secs(1)),
+            sockets: [("443/TCP", Protocol::Tcp, tcp), ("5353/UDP", Protocol::Udp, udp)].map(|(endpoint, protocol, port_rates)| SocketActivity {
+                key: endpoint.into(), endpoint: endpoint.into(), name: String::new(), address: String::new(), peer: String::new(),
+                protocol, established: 0, arrivals: None, port_rates,
+            }).into(),
+        };
+        let quiet = Some(Rates { received: 0.0, sent: 0.0 });
+        let points = VecDeque::from([
+            reading(0, true, Some(Rates { received: 10.0, sent: 5.0 }), Some(Rates { received: 2.0, sent: 3.0 })),
+            reading(1, false, None, None),
+            reading(2, true, None, None),
+            reading(3, true, quiet, quiet),
+            reading(4, false, None, None),
+        ]);
+        let selection = points[0].sockets.iter().map(|socket| Series { key: socket.key.clone(), label: socket.endpoint.clone() })
+            .collect::<Vec<_>>();
+        let metric = PortMetric::Rates;
+        let selected = PortSelection { series: &selection, metric };
+        assert_eq!(selection_stats(&points, selected), SelectionStats { active: 2, zero: 0, no_data: 0 });
+        assert_eq!(selection_stats(&VecDeque::from([points[2].clone()]), selected), SelectionStats { active: 0, zero: 0, no_data: 2 });
+        assert_eq!(selection_stats(&VecDeque::from([points[3].clone()]), selected), SelectionStats { active: 0, zero: 2, no_data: 0 });
+        let samples = samples_for(&points, Some(metric)).map(|point| series_value(point, &selection[0], metric))
+            .collect::<Vec<_>>();
+        assert_eq!(samples, [Some(15.0), None, Some(0.0)]);
+
+        let bounds = RECT { left: 0, top: 0, right: 800, bottom: 150 };
+        let plot = series_plot(plot(bounds, true));
+        let scale = series_scale(metric, Some(15.0));
+        for (value, expected) in [(15.0, "443/TCP"), (5.0, "5353/UDP")] {
+            let sockets = hovered_sockets(&points[0], &points, bounds, Some(selected), y_position(plot, scale, value));
+            assert_eq!(sockets.len(), 1);
+            assert_eq!(sockets[0].endpoint, expected);
+        }
+        let lost_x = sample_x(plot, points.back().unwrap(), &points[2]);
+        assert_eq!(sample_at(&points, bounds, Some(metric), lost_x).unwrap().at, points[2].at);
+        assert_eq!(sample_at(&points, bounds, Some(metric), plot.right).unwrap().at, points[3].at);
     }
 }

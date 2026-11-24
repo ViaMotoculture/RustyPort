@@ -128,17 +128,21 @@ au processus identifié.
 dans cette session. Le détail affiche aussi l'âge du processus si
 Windows le communique. Le compteur de surveillance démarre à l'ouverture.
 
-Le graphique affiche les débits reçus et envoyés sur les 60 dernières
-secondes à partir des compteurs d'octets Windows. Il additionne les
+Le graphique des interfaces affiche les débits reçus et envoyés sur les
+60 dernières secondes à partir des compteurs d'octets Windows. Il additionne les
 interfaces actives hors bouclage et interfaces de filtrage. Avec un VPN,
 un paquet peut être mesuré sur plusieurs interfaces. Un débit à zéro
 correspond à un intervalle mesuré. Un intervalle indisponible laisse un
-trou dans le graphique. Les débits sont globaux. Le détail UDP indique
-que l'activité par port est indisponible.
+trou dans le graphique.
 
 Survole le graphique pour lire la valeur du relevé, le nom du processus,
 le port et un correspondant quand il est disponible.
-« Ports TCP sélectionnés » donne le choix entre deux mesures par port.
+« Ports sélectionnés » donne le choix entre le débit et deux mesures TCP.
+« Débit par port » trace une courbe par port TCP ou UDP, en octets par
+seconde. Elle additionne les octets reçus et envoyés rapportés par la
+trace réseau Windows. Le survol sépare les deux valeurs. La mesure se
+fait sur des fenêtres d'au moins une seconde. Si Windows refuse l'accès,
+lance RustyPort en tant qu'administrateur.
 « Nouvelles connexions » affiche les arrivées détectées entre deux relevés
 sous forme de pics. « Connexions établies » indique combien de connexions
 étaient ouvertes au relevé. Une ligne plate indique que ce nombre reste
@@ -162,8 +166,9 @@ Décoche la case pour suspendre les écritures. « Nettoyer… » efface les
 relevés temporaires après confirmation. Les commandes de sauvegarde
 exportent toute la session ou une période au format CSV. La colonne
 `tcp_nouvelles_releve` reste vide lors du premier relevé d'un port ou
-lorsque la référence précédente est indisponible. Les bornes de période
-sont relatives au lancement.
+lorsque la référence précédente est indisponible. Les lignes de port
+contiennent les octets par seconde mesurés et la durée de leur fenêtre
+dans `debit_port_mesure_ms`. Les bornes de période sont relatives au lancement.
 
 La croix masque la fenêtre. Un clic sur l'icône RustyPort près de l'horloge
 ou un nouveau lancement rouvre la fenêtre. « Quitter » termine l'application

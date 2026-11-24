@@ -28,8 +28,9 @@ sélection. L'inventaire associe une teinte à chaque niveau. Le volet
   l'affichage, le filtrage et le tri des lignes. `src/level_preferences.rs`
   conserve les niveaux manuels dans les préférences du compte Windows.
 - `src/monitor.rs` relève les octets des interfaces actives avec IP Helper.
-  `src/chart.rs` dessine les débits des interfaces ou les connexions TCP
-  des ports sélectionnés. `src/archive.rs` gère la lecture par fenêtres
+  `src/port_traffic.rs` utilise la trace réseau Windows en temps réel pour
+  le débit des ports. `src/chart.rs` dessine les débits et les connexions TCP.
+  `src/archive.rs` gère la lecture par fenêtres
   de 60 secondes, les relevés temporaires sur disque et les exports CSV.
 - `src/firewall.rs` gère le blocage entrant et le retrait d'une règle RustyPort
   via le Pare-feu Windows, ainsi que l'expiration des règles temporaires.
@@ -67,8 +68,10 @@ Windows qui les exigent. Le projet est un utilitaire de poste de travail.
 - Le dépôt versionne les sources et le verrou des dépendances. `RustyPort.exe`
   à la racine reste le lanceur local généré.
 - Utiliser les compteurs natifs des interfaces hors bouclage et les états
-  TCP disponibles sans élévation. Les débits concernent les interfaces et
-  l'activité UDP par port est indiquée comme indisponible.
+  TCP disponibles sans élévation. Le débit par port utilise une session
+  Windows activée à la demande dans le graphique. Les mesures incomplètes
+  ou non attribuables restent absentes. La session ne conserve que des
+  compteurs d'octets, d'adresses, de ports et de processus en mémoire.
 - Le niveau est une indication locale. Un port identifié comme sensible et
   lié au réseau prime sur la reconnaissance du processus. Le pare-feu et
   l'accessibilité depuis Internet demandent leur propre vérification.
@@ -92,10 +95,3 @@ Windows qui les exigent. Le projet est un utilitaire de poste de travail.
 - La surveillance des relances se borne au chemin exact d'une application
   de l'utilisateur. Une relance est arrêtée au relevé suivant. Elle prend
   fin à l'échéance, sur annulation ou quand RustyPort quitte réellement.
-
-
-## Historique public et préférences
-
-Les anciennes adresses Git ont été neutralisées et les identifiants des commits réécrits ont changé. Les anciens identifiants cités dans le journal peuvent ne plus correspondre à une branche.
-
-Les préférences s'enregistrent sous `%LOCALAPPDATA%/RustyPort` et ne sont pas migrées depuis l'ancien dossier. GitHub Secret scanning et Push protection sont activés.

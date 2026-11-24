@@ -152,3 +152,21 @@
   Le rendu GDI des deux modes a aussi été contrôlé en mémoire.
 - Windows a trouvé le groupe d'icônes dans `RustyPort.exe`.
   SHA-256 `862A0B1A6C8D5673B913B43BFFD1E7AF599E527988D35FD69E5AFD4D8EE75045`.
+
+## 2026-11-24 - Débit par port en validation
+
+- Les 24 tests ordinaires passent en version optimisée. Le graphique
+  hors écran a affiché deux débits TCP distincts, un débit UDP, un zéro
+  mesuré et un relevé manquant avec des mesures injectées. Le survol,
+  l'attribution des débits et l'archive CSV ont été vérifiés.
+- Avec trois ports et de vrais échanges locaux, Windows a renvoyé
+  « Accès refusé » (5) au démarrage de la trace. RustyPort reste réactif
+  et affiche que le débit par port est indisponible.
+- Le processus de nettoyage attend l'arrêt du parent identifié. Son
+  démarrage et sa sortie ont été vérifiés sans élévation. La mesure et
+  le nettoyage d'une trace active après arrêt forcé demandent encore
+  un test avec les droits ETW.
+- Le test de mesure native s'exécute sur le bouclage depuis une console
+  autorisée avec `cargo test --locked port_traffic::tests::measures_native_loopback_tcp_and_udp_in_both_directions -- --ignored --exact`.
+- L'exécutable de test avec son icône a pour SHA-256
+  `6D4D369915E4A03777F57D9B7C7546603931A2600D669BD58AF02E7FB41D8D31`.

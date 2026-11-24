@@ -8,6 +8,7 @@ mod firewall;
 mod icon;
 mod level_preferences;
 mod monitor;
+mod port_traffic;
 mod ports;
 mod risk;
 mod relaunch;
@@ -40,7 +41,7 @@ use windows_sys::core::{PCWSTR, w};
 
 use firewall::Action as FirewallAction;
 use level_preferences::LevelPreferences;
-use monitor::{DEFAULT_INTERVAL_MS, INTERVALS, Monitor, Point, Reading, TrafficHistory, TrafficState};
+use monitor::{DEFAULT_INTERVAL_MS, INTERVALS, Monitor, Point, PortTrafficState, Reading, TrafficHistory, TrafficState};
 use ports::{Port, Protocol, wide};
 use risk::{Risk, usual_use};
 use table_view::{COLUMNS, Entry, PortKey, Row, Sort, duration_label, visible_rows};
@@ -134,6 +135,7 @@ struct App {
     system_directory: String,
     monitor: Monitor,
     monitor_lost: Cell<bool>,
+    port_traffic: Cell<PortTrafficState>,
     traffic: RefCell<TrafficHistory>,
     archive: RefCell<Option<archive::Archive>>,
     archive_error: Cell<bool>,
@@ -179,9 +181,10 @@ impl App {
         let traffic_label = label("Débit des interfaces · 60 s")?;
         let traffic_status = label("Mesure du débit en cours…")?;
         let graph_detail = label("")?;
-        let port_graph = control(window, w!("BUTTON"), "Ports TCP sélectionnés", BS_AUTOCHECKBOX as u32, ID_PORT_GRAPH, false)?;
+        let port_graph = control(window, w!("BUTTON"), "Ports sélectionnés", BS_AUTOCHECKBOX as u32, ID_PORT_GRAPH, false)?;
         let graph_metric = control(window, w!("COMBOBOX"), "", CBS_DROPDOWNLIST as u32, ID_GRAPH_METRIC, false)?;
         unsafe {
+            SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Débit par port") as isize);
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Nouvelles connexions") as isize);
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Connexions établies") as isize);
             SendMessageW(graph_metric, CB_SETCURSEL, 0, 0);
@@ -264,6 +267,7 @@ impl App {
             shown_uptime: Cell::new(u64::MAX),
             system_directory: ports::system_directory().unwrap_or_default(),
             monitor, monitor_lost: Cell::new(false),
+            port_traffic: Cell::new(PortTrafficState::Off),
             traffic: RefCell::new(TrafficHistory::default()),
             archive: RefCell::new(None),
             archive_error: Cell::new(false),
@@ -440,7 +444,7 @@ impl App {
         let archive = self.paused.borrow();
         let live = self.traffic.borrow();
         let series = self.graph_series.borrow();
-        let selection = series.as_deref().map(|series| chart::TcpSelection { series, metric: self.tcp_metric() });
+        let selection = series.as_deref().map(|series| chart::PortSelection { series, metric: self.port_metric() });
         chart::paint(dc, theme.body_font(), layout.plot, archive.as_ref().unwrap_or(&live.points),
             self.graph_pointer.get().map(|(x, _)| x), selection, archive.is_some());
     }
@@ -574,22 +578,26 @@ impl App {
         self.update_traffic_label();
     }
 
-    fn tcp_metric(&self) -> chart::TcpMetric {
-        if unsafe { SendMessageW(self.graph_metric, CB_GETCURSEL, 0, 0) } == 1 {
-            chart::TcpMetric::Established
-        } else {
-            chart::TcpMetric::Arrivals
+    fn port_metric(&self) -> chart::PortMetric {
+        match unsafe { SendMessageW(self.graph_metric, CB_GETCURSEL, 0, 0) } {
+            1 => chart::PortMetric::Arrivals,
+            2 => chart::PortMetric::Established,
+            _ => chart::PortMetric::Rates,
         }
     }
 
     fn refresh_graph_mode(&self) {
-        let title = if self.graph_series.borrow().is_none() {
-            "Débit des interfaces · 60 s"
-        } else if self.tcp_metric() == chart::TcpMetric::Arrivals {
-            "Nouvelles TCP par relevé · 60 s"
-        } else {
-            "Connexions TCP établies · 60 s"
+        let metric = self.port_metric();
+        let graph_series = self.graph_series.borrow();
+        self.monitor.set_port_capture(metric == chart::PortMetric::Rates
+            && graph_series.as_ref().is_some_and(|series| !series.is_empty()));
+        let title = match graph_series.as_ref().map(|_| metric) {
+            None => "Débit des interfaces · 60 s",
+            Some(chart::PortMetric::Rates) => "Débit par port · 60 s",
+            Some(chart::PortMetric::Arrivals) => "Nouvelles TCP par relevé · 60 s",
+            Some(chart::PortMetric::Established) => "Connexions TCP établies · 60 s",
         };
+        drop(graph_series);
         set_text(self.traffic_label, title);
         self.update_traffic_label();
         self.invalidate_chart();
@@ -599,25 +607,35 @@ impl App {
         let paused = self.paused.borrow();
         let history = self.traffic.borrow();
         let series = self.graph_series.borrow();
-        let selection = series.as_deref().map(|series| chart::TcpSelection { series, metric: self.tcp_metric() });
-        let arrivals = selection.is_some_and(|view| view.metric == chart::TcpMetric::Arrivals);
+        let selection = series.as_deref().map(|series| chart::PortSelection { series, metric: self.port_metric() });
+        let metric = selection.map(|view| view.metric);
+        let arrivals = metric == Some(chart::PortMetric::Arrivals);
+        let port_rates = metric == Some(chart::PortMetric::Rates);
+        let port_state = self.port_traffic.get();
         let points = paused.as_ref().unwrap_or(&history.points);
         let bounds = self.chart_bounds();
         let mut detail = String::new();
         let hovered = self.graph_pointer.get().and_then(|(x, y)| {
-            let point = chart::sample_at(points, bounds, series.is_some(), x)?;
+            let point = chart::sample_at(points, bounds, metric, x)?;
             let age = format!("{:.1}", point.at.elapsed().as_secs_f64()).replace('.', ",");
             let sockets = chart::hovered_sockets(point, points, bounds, selection, y);
             if let Some(socket) = sockets.first() {
                 detail = format!("{} · {}", socket.name, socket.endpoint);
-                if arrivals && let Some(count) = socket.arrivals {
-                    let _ = write!(detail, " · {count} nouvelle(s)");
-                }
-                let _ = write!(detail, " · {} établie(s) · {}", socket.established, socket.address);
-                if !socket.peer.is_empty() {
-                    detail.push_str(&format!(" ↔ {}", socket.peer));
-                    if socket.established > 1 {
-                        detail.push_str(" (un correspondant)");
+                if port_rates {
+                    if let Some(rates) = socket.port_rates {
+                        let _ = write!(detail, " · Reçu {} · Envoyé {} · {}", chart::rate_label(rates.received),
+                            chart::rate_label(rates.sent), socket.address);
+                    }
+                } else {
+                    if arrivals && let Some(count) = socket.arrivals {
+                        let _ = write!(detail, " · {count} nouvelle(s)");
+                    }
+                    let _ = write!(detail, " · {} établie(s) · {}", socket.established, socket.address);
+                    if !socket.peer.is_empty() {
+                        detail.push_str(&format!(" ↔ {}", socket.peer));
+                        if socket.established > 1 {
+                            detail.push_str(" (un correspondant)");
+                        }
                     }
                 }
                 if series.is_none() {
@@ -628,14 +646,17 @@ impl App {
                     }
                 }
             } else {
-                detail = if arrivals {
+                detail = if port_rates {
+                    "Aucun débit attribuable à ces ports à ce relevé."
+                } else if arrivals {
                     "Nouvelles connexions indisponibles pour ces ports à ce relevé."
                 } else {
                     "Aucune connexion TCP correspondante au relevé."
                 }.into();
             }
             let label = if series.is_some() {
-                let measurement = if arrivals { "Nouvelles TCP depuis le relevé précédent" } else { "Connexions TCP établies" };
+                let measurement = if port_rates { "Débit en octets/s · reçu + envoyé" }
+                    else if arrivals { "Nouvelles TCP depuis le relevé précédent" } else { "Connexions TCP établies" };
                 let mut label = format!("Il y a {age} s · {measurement}");
                 if sockets.len() > 1 {
                     let others = sockets.iter().skip(1).take(2).map(|socket| socket.endpoint.as_str())
@@ -657,9 +678,18 @@ impl App {
         });
         let label = hovered.unwrap_or_else(|| {
             if let Some(selection) = selection {
+                if port_rates && !selection.series.is_empty() && paused.is_none() {
+                    match port_state {
+                        PortTrafficState::AccessDenied => return "Débit par port indisponible · accès Windows refusé.".into(),
+                        PortTrafficState::Unavailable => return "La capture réseau Windows est indisponible.".into(),
+                        PortTrafficState::Off | PortTrafficState::Starting => return "Débit par port · initialisation de la mesure Windows…".into(),
+                        PortTrafficState::Measuring => {}
+                    }
+                }
                 let stats = chart::selection_stats(points, selection);
-                let observed = if arrivals { "avec des arrivées" } else { "avec des connexions" };
-                let mut label = format!("{} port(s) TCP · {} {observed} · {} à zéro", selection.series.len(), stats.active, stats.zero);
+                let ports = if port_rates { "port(s)" } else { "port(s) TCP" };
+                let observed = if port_rates { "avec trafic" } else if arrivals { "avec des arrivées" } else { "avec des connexions" };
+                let mut label = format!("{} {ports} · {} {observed} · {} à zéro", selection.series.len(), stats.active, stats.zero);
                 if stats.no_data > 0 {
                     let _ = write!(label, " · {} sans relevé", stats.no_data);
                 }
@@ -676,6 +706,10 @@ impl App {
         if detail.is_empty() {
             detail = if self.archive_error.get() {
                 "Archivage sur disque indisponible pour les nouveaux relevés."
+            } else if port_rates && port_state == PortTrafficState::AccessDenied {
+                "Ouvre RustyPort en tant qu’administrateur pour accéder à la capture réseau de Windows."
+            } else if port_rates {
+                "Une courbe par port TCP ou UDP. Le débit total additionne les octets reçus et envoyés."
             } else if arrivals {
                 "Chaque pic compte les nouvelles connexions observées entre deux relevés."
             } else if selection.is_some() {
@@ -709,10 +743,11 @@ impl App {
         if selected != self.graph_series.borrow().is_some() {
             unsafe { ShowWindow(self.graph_metric, if selected { SW_SHOWNA } else { SW_HIDE }) };
         }
+        let port_rates = self.port_metric() == chart::PortMetric::Rates;
         let series = selected.then(|| {
             let mut series: Vec<_> = self.selected_entries().into_iter().filter_map(|entry| {
                 let port = entry.port;
-                (port.endpoint.protocol == Protocol::Tcp).then(|| chart::Series {
+                (port_rates || port.endpoint.protocol == Protocol::Tcp).then(|| chart::Series {
                     key: port.graph_key(),
                     label: format!("{} · {}", port.endpoint.label(), port.owner.name),
                 })
@@ -957,7 +992,8 @@ impl App {
     }
 
     fn apply_reading(&self, reading: Reading) {
-        let (at, ports, traffic) = reading.apply(&mut self.traffic.borrow_mut());
+        let (at, ports, traffic, port_traffic) = reading.apply(&mut self.traffic.borrow_mut());
+        self.port_traffic.set(port_traffic);
         if self.archive_enabled.get() && !self.archive_error.get()
             && let Some(point) = self.traffic.borrow().points.back()
             && let Some(archive) = self.archive.borrow_mut().as_mut()
@@ -2087,7 +2123,10 @@ unsafe extern "system" fn handle_message(window: HWND, message: u32, wparam: WPA
                     ID_WATCHES => app.watches_menu(),
                     ID_PAUSE_GRAPH => app.toggle_graph_pause(),
                     ID_PORT_GRAPH => app.update_graph_series(),
-                    ID_GRAPH_METRIC if notification == CBN_SELCHANGE as u16 => app.refresh_graph_mode(),
+                    ID_GRAPH_METRIC if notification == CBN_SELCHANGE as u16 => {
+                        app.update_graph_series();
+                        app.refresh_graph_mode();
+                    }
                     ID_ARCHIVE_PANEL => app.toggle_archive_panel(),
                     ID_ARCHIVE_ENABLED => app.toggle_archive(),
                     ID_SAVE_ARCHIVE => app.save_history(false),
@@ -2244,6 +2283,7 @@ fn run() -> io::Result<()> {
 fn main() {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
+        Some(port_traffic::CLEANUP_FLAG) => std::process::exit(port_traffic::run_cleanup(arguments)),
         Some(stop_job::HELPER_FLAG) => std::process::exit(stop_job::run_helper(arguments)),
         Some(stop_job::BATCH_FLAG) => std::process::exit(stop_job::run_batch_helper(arguments)),
         Some("--embed-icon") => {
@@ -2435,22 +2475,24 @@ mod tests {
             SetKeyboardState(keyboard.as_ptr());
         }
         assert_eq!(app.selected_count(), app.rows.borrow().len());
+        assert!(app.port_metric() == chart::PortMetric::Rates);
         unsafe {
+            SendMessageW(app.graph_metric, CB_SETCURSEL, 1, 0);
             SendMessageW(app.port_graph, BM_SETCHECK, BST_CHECKED as usize, 0);
             SendMessageW(window, WM_COMMAND, usize::from(ID_PORT_GRAPH), 0);
         }
         assert!(app.graph_series.borrow().as_ref().unwrap().len() >= 2);
-        assert!(app.tcp_metric() == chart::TcpMetric::Arrivals);
+        assert!(app.port_metric() == chart::PortMetric::Arrivals);
         assert_eq!(window_text(app.traffic_label), "Nouvelles TCP par relevé · 60 s");
         let choose_metric = |index| unsafe {
             SendMessageW(app.graph_metric, CB_SETCURSEL, index, 0);
             SendMessageW(window, WM_COMMAND, usize::from(ID_GRAPH_METRIC) | ((CBN_SELCHANGE as usize) << 16),
                 app.graph_metric as isize);
         };
-        choose_metric(1);
-        assert!(app.tcp_metric() == chart::TcpMetric::Established);
+        choose_metric(2);
+        assert!(app.port_metric() == chart::PortMetric::Established);
         assert_eq!(window_text(app.traffic_label), "Connexions TCP établies · 60 s");
-        choose_metric(0);
+        choose_metric(1);
         app.toggle_graph_pause();
         let frozen = app.paused.borrow().as_ref().unwrap().back().unwrap().at;
         let deadline = Instant::now() + Duration::from_secs(5);
