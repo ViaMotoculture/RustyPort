@@ -189,7 +189,7 @@ impl App {
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Débit par port") as isize);
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Nouvelles connexions") as isize);
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Connexions établies") as isize);
-            SendMessageW(graph_metric, CB_SETCURSEL, 2, 0);
+            SendMessageW(graph_metric, CB_SETCURSEL, 0, 0);
             ShowWindow(graph_metric, SW_HIDE);
         }
         let pause_graph = control(window, w!("BUTTON"), "Pause", 0, ID_PAUSE_GRAPH, false)?;
@@ -2539,20 +2539,22 @@ mod tests {
             SetKeyboardState(keyboard.as_ptr());
         }
         assert_eq!(app.selected_count(), app.rows.borrow().len());
-        assert!(app.port_metric() == chart::PortMetric::Established);
+        assert_eq!(window_text(app.traffic_label), "Débit des interfaces · 60 s");
         unsafe {
-            SendMessageW(app.graph_metric, CB_SETCURSEL, 1, 0);
             SendMessageW(app.port_graph, BM_SETCHECK, BST_CHECKED as usize, 0);
             SendMessageW(window, WM_COMMAND, usize::from(ID_PORT_GRAPH), 0);
         }
         assert!(app.graph_series.borrow().as_ref().unwrap().len() >= 2);
-        assert!(app.port_metric() == chart::PortMetric::Arrivals);
-        assert_eq!(window_text(app.traffic_label), "Nouvelles TCP par relevé · 60 s");
+        assert!(app.port_metric() == chart::PortMetric::Rates);
+        assert_eq!(window_text(app.traffic_label), "Débit par port · 60 s");
         let choose_metric = |index| unsafe {
             SendMessageW(app.graph_metric, CB_SETCURSEL, index, 0);
             SendMessageW(window, WM_COMMAND, usize::from(ID_GRAPH_METRIC) | ((CBN_SELCHANGE as usize) << 16),
                 app.graph_metric as isize);
         };
+        choose_metric(1);
+        assert!(app.port_metric() == chart::PortMetric::Arrivals);
+        assert_eq!(window_text(app.traffic_label), "Nouvelles TCP par relevé · 60 s");
         choose_metric(2);
         assert!(app.port_metric() == chart::PortMetric::Established);
         assert_eq!(window_text(app.traffic_label), "Connexions TCP établies · 60 s");

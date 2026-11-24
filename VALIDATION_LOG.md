@@ -203,3 +203,16 @@
   sans élévation reçoit le code Windows 740, élévation requise.
 - Le binaire de livraison a pour SHA-256
   `CB34648C26220D16072135BE1FE98245389535FA46728062DA1E1FEE3A744E46`.
+
+## 2026-11-24 - Débit par port par défaut
+
+- Le test Win32 vérifie le débit des interfaces au démarrage, puis le
+  titre « Débit par port · 60 s » à l’activation de « Ports sélectionnés ».
+  Les vues « Nouvelles connexions » et « Connexions établies » restent
+  accessibles dans le menu.
+- `cargo check --all-targets --locked`, la compilation de livraison et
+  les 26 tests optimisés réussissent. Le test de capture réelle ETW
+  demande une session avec les droits Windows.
+- Windows exige l’élévation pour le binaire livré. Les deux copies
+  locales mises à jour ont pour SHA-256
+  `A59498AE3B8516BF90FD87DA358E877CE3375D466AE0EA289B9C6375CDE9EF42`.

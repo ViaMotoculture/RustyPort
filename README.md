@@ -14,7 +14,7 @@ RustyPort est un utilitaire Windows écrit en Rust avec une interface Win32. Il 
 
 ## Lire le graphique et conserver un relevé
 
-Le graphique couvre les 60 dernières secondes. « Ports sélectionnés » ouvre la vue **Connexions établies** par défaut. Le menu voisin permet de choisir la mesure.
+Le graphique couvre les 60 dernières secondes. « Ports sélectionnés » ouvre la vue **Débit par port** par défaut. Le menu voisin permet de choisir la mesure.
 
 - **Débit des interfaces** affiche les octets reçus et envoyés par seconde, cumulés sur les interfaces actives hors bouclage.
 - **Débit par port** affiche une courbe en octets par seconde par port TCP ou UDP sélectionné. La courbe additionne les octets reçus et envoyés rapportés par Windows. Le survol détaille les deux sens. La collecte utilise des fenêtres d’au moins une seconde et demande les droits de capture de Windows.
