@@ -55,3 +55,17 @@
   requête locale a reçu HTTP 200. L'Explorateur a trouvé le groupe d'icônes
   dans le binaire livré. Son SHA-256 est
   `83180C58851738A363FB446DF5F8C0BAD71D26DB51B23051DDE650E39E544C6B`.
+
+## 2026-11-24 - Publication et disposition néo-rétro
+
+- Les trois versions locales initiales ont été publiées sur `main` sous
+  le compte GitHub `RustyPort` jusqu'au commit `516c1a3`. Les
+  empreintes des arborescences correspondent aux versions locales.
+- Les 13 tests, `cargo check --all-targets --locked` et
+  `cargo build --release --locked` ont réussi sous Windows.
+- Une instance de test hors écran a vérifié l'affichage à 1100 × 760 et
+  900 × 630, le filtre, le volet d'historique, deux courbes TCP en pause
+  et le détail au survol. Ouvrir le volet a laissé l'archivage désactivé.
+- Windows a trouvé le groupe d'icônes dans l'exécutable de livraison.
+  SHA-256
+  `B5674B9C15A5855D6BAA33EA65F449DFF6EF29EA0656A7AC532A22BA8D752C69`.

@@ -14,10 +14,16 @@ L'intervalle se règle de 250 ms à 10 s, avec 500 ms par défaut. La croix
 masque la fenêtre et la surveillance continue dans la zone de notification.
 Un nouveau lancement réaffiche l'instance existante.
 
+La fenêtre regroupe la cadence et la durée de surveillance dans le bandeau.
+Le graphique affiche les repères temporels et les courbes utiles à la
+sélection. L'inventaire associe une teinte à chaque niveau. Le volet
+« Historique » se replie et indique l'espace disque occupé.
+
 ## Structure
 
-- `src/main.rs` gère l'interface native. `src/ports.rs` lit les tables de
-  ports, les processus et les services Windows.
+- `src/main.rs` gère l'interface native et `src/ui.rs` en définit la
+  disposition et le thème. `src/ports.rs` lit les tables de ports, les
+  processus et les services Windows.
 - `src/risk.rs` décrit les niveaux d'exposition. `src/table_view.rs` gère
   l'affichage, le filtrage et le tri des lignes.
 - `src/monitor.rs` relève les octets des interfaces actives avec IP Helper.

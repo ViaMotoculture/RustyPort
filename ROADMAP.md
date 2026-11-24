@@ -68,11 +68,18 @@
 - Réouvrir la fenêtre de l'instance active au prochain lancement et intégrer
   l'icône aux ressources du fichier exécutable.
 
+## Réalisé - Disposition néo-rétro
+
+- Regrouper la cadence et la durée de surveillance dans le bandeau.
+- Agrandir le graphique et ajouter des repères temporels, une légende de
+  couleurs et des marqueurs au survol.
+- Rapprocher les filtres du tableau et les actions du détail de la sélection.
+- Replier le volet d'historique au lancement et laisser visible l'espace
+  disque utilisé.
+
 ## À valider
 
 - Exécuter sur un poste Windows avec droits d'administration un blocage
   temporaire sur un port de test et vérifier son expiration.
 - Vérifier l'invite UAC du nouvel arrêt sur un processus de test qui demande
   une élévation.
-- Publier les commits de RustyPort sur la branche `main` du dépôt
-  de référence. Le journal indique l'état de l'accès Git.

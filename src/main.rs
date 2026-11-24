@@ -13,6 +13,7 @@ mod relaunch;
 mod stop_job;
 mod table_view;
 mod tray;
+mod ui;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -57,7 +58,11 @@ const ID_SAVE_ARCHIVE: u16 = 112;
 const ID_SAVE_RANGE: u16 = 113;
 const ID_CLEAR_ARCHIVE: u16 = 114;
 const ID_ARCHIVE_ENABLED: u16 = 115;
+const ID_ARCHIVE_PANEL: u16 = 116;
 const TBM_GETPOS: u32 = WM_USER;
+const SS_ICON: u32 = 0x0003;
+const SS_CENTERIMAGE: u32 = 0x0200;
+const SS_ENDELLIPSIS: u32 = 0x4000;
 const EXIT_MENU: usize = 450;
 const FIREWALL_TIMER: usize = 1;
 const MONITOR_TIMER: usize = 2;
@@ -81,13 +86,17 @@ struct PendingBulk {
 
 struct App {
     window: HWND,
+    theme: RefCell<ui::Theme>,
+    brand_icon: HWND,
+    brand: HWND,
     traffic_label: HWND,
     traffic_status: HWND,
     graph_detail: HWND,
     pause_graph: HWND,
     port_graph: HWND,
     timeline: HWND,
-    archive_size: HWND,
+    timeline_label: HWND,
+    archive_panel: HWND,
     save_archive: HWND,
     save_range: HWND,
     clear_archive: HWND,
@@ -102,6 +111,7 @@ struct App {
     risk_filter: HWND,
     refresh: HWND,
     list: HWND,
+    details_label: HWND,
     details: HWND,
     stop: HWND,
     block: HWND,
@@ -117,6 +127,8 @@ struct App {
     archive: RefCell<Option<archive::Archive>>,
     archive_error: Cell<bool>,
     archive_enabled: Cell<bool>,
+    archive_open: Cell<bool>,
+    layout_width: Cell<i32>,
     pending_export: RefCell<Option<Receiver<io::Result<usize>>>>,
     paused: RefCell<Option<VecDeque<Point>>>,
     graph_series: RefCell<Option<Vec<chart::Series>>>,
@@ -140,62 +152,76 @@ struct App {
 
 impl App {
     fn new(window: HWND) -> io::Result<Self> {
-        let traffic_label = control(window, w!("STATIC"), "Trafic des interfaces · 60 dernières secondes", 0, 0, false)?;
-        let traffic_status = control(window, w!("STATIC"), "Mesure du débit en cours…", 0, 0, false)?;
-        let graph_detail = control(window, w!("STATIC"), "", 0, 0, false)?;
-        let pause_graph = control(window, w!("BUTTON"), "Pause graphe", 0, ID_PAUSE_GRAPH, false)?;
-        let port_graph = control(window, w!("BUTTON"), "Courbes des ports sélectionnés", BS_AUTOCHECKBOX as u32, ID_PORT_GRAPH, false)?;
-        let timeline = control(window, TRACKBAR_CLASSW, "", TBS_NOTICKS, 111, false)?;
-        let archive_size = control(window, w!("STATIC"), "Disque · 0 o", 0, 0, false)?;
-        let save_archive = control(window, w!("BUTTON"), "Sauvegarder tout…", 0, ID_SAVE_ARCHIVE, false)?;
-        let save_range = control(window, w!("BUTTON"), "Sauvegarder une période…", 0, ID_SAVE_RANGE, false)?;
-        let clear_archive = control(window, w!("BUTTON"), "Nettoyer…", 0, ID_CLEAR_ARCHIVE, false)?;
-        let archive_toggle = control(window, w!("BUTTON"), "Archivage sur disque", BS_AUTOCHECKBOX as u32,
-            ID_ARCHIVE_ENABLED, false)?;
-        unsafe {
-            SendMessageW(timeline, TBM_SETRANGE, 1, 0);
-            EnableWindow(timeline, 0);
-        }
-        let session = control(window, w!("STATIC"), "", 0, 0, false)?;
-        let interval_label = control(window, w!("STATIC"), "Relevé", 0, 0, false)?;
+        let label = |text| control(window, w!("STATIC"), text, SS_CENTERIMAGE | SS_ENDELLIPSIS, 0, false);
+        let brand_icon = control(window, w!("STATIC"), "", SS_ICON | SS_CENTERIMAGE, 0, false)?;
+        let brand = label("OpenPort")?;
+        let session = label("")?;
+        let interval_label = label("Cadence")?;
         let interval = control(window, w!("COMBOBOX"), "", CBS_DROPDOWNLIST as u32 | WS_VSCROLL, ID_INTERVAL, false)?;
         for (_, label) in INTERVALS {
             unsafe { SendMessageW(interval, CB_ADDSTRING, 0, wide(label).as_ptr() as isize) };
         }
         let default_interval = INTERVALS.iter().position(|(milliseconds, _)| *milliseconds == DEFAULT_INTERVAL_MS).unwrap();
         unsafe { SendMessageW(interval, CB_SETCURSEL, default_interval, 0) };
-        let overview = control(window, w!("STATIC"), "", 0, 0, false)?;
-        let levels = control(window, w!("BUTTON"), "Critères des niveaux…", 0, ID_LEVELS, false)?;
-        let filter_label = control(window, w!("STATIC"), "Filtrer", 0, 0, false)?;
+        let refresh = control(window, w!("BUTTON"), "Actualiser", 0, ID_REFRESH, false)?;
+        let traffic_label = label("Trafic des interfaces · 60 s")?;
+        let traffic_status = label("Mesure du débit en cours…")?;
+        let graph_detail = label("")?;
+        let port_graph = control(window, w!("BUTTON"), "Ports TCP sélectionnés", BS_AUTOCHECKBOX as u32, ID_PORT_GRAPH, false)?;
+        let pause_graph = control(window, w!("BUTTON"), "Pause", 0, ID_PAUSE_GRAPH, false)?;
+        let archive_panel = control(window, w!("BUTTON"), "Historique + · 0 o", 0, ID_ARCHIVE_PANEL, false)?;
+        let timeline_label = label("Parcourir les relevés")?;
+        let timeline = control(window, TRACKBAR_CLASSW, "", TBS_NOTICKS, 111, false)?;
+        let archive_toggle = control(window, w!("BUTTON"), "Archivage sur disque", BS_AUTOCHECKBOX as u32,
+            ID_ARCHIVE_ENABLED, false)?;
+        let save_archive = control(window, w!("BUTTON"), "Sauvegarder tout…", 0, ID_SAVE_ARCHIVE, false)?;
+        let save_range = control(window, w!("BUTTON"), "Sauvegarder une période…", 0, ID_SAVE_RANGE, false)?;
+        let clear_archive = control(window, w!("BUTTON"), "Nettoyer…", 0, ID_CLEAR_ARCHIVE, false)?;
+        unsafe {
+            SendMessageW(timeline, TBM_SETRANGE, 1, 0);
+            EnableWindow(timeline, 0);
+        }
+        let overview = label("")?;
+        let filter_label = label("&Filtrer")?;
         let filter = control(window, w!("EDIT"), "", ES_AUTOHSCROLL as u32, ID_FILTER, true)?;
         unsafe {
-            SendMessageW(filter, EM_SETCUEBANNER, 1, w!("Port, processus, adresse ou service") as isize);
+            SendMessageW(filter, EM_SETCUEBANNER, 1, w!("Port, processus, adresse…") as isize);
         }
         let risk_filter = control(window, w!("COMBOBOX"), "", CBS_DROPDOWNLIST as u32 | WS_VSCROLL, ID_RISK, false)?;
         for label in std::iter::once("Tous les niveaux").chain(Risk::LEVELS.map(Risk::label)) {
             unsafe { SendMessageW(risk_filter, CB_ADDSTRING, 0, wide(label).as_ptr() as isize) };
         }
         unsafe { SendMessageW(risk_filter, CB_SETCURSEL, 0, 0) };
-        let refresh = control(window, w!("BUTTON"), "Actualiser", 0, ID_REFRESH, false)?;
+        let levels = control(window, w!("BUTTON"), "Critères de niveau…", 0, ID_LEVELS, false)?;
         let list = control(window, WC_LISTVIEWW, "",
             LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS, 0, true)?;
         unsafe {
             SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
                 (LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP) as isize);
         }
-        for (index, (_, label, width)) in COLUMNS.into_iter().enumerate() {
+        for (index, (column, label, width)) in COLUMNS.into_iter().enumerate() {
+            use table_view::Column;
             let mut label = wide(label);
+            let width = match column {
+                Column::Address => 141,
+                Column::Process => width,
+                Column::Protocol => 67,
+                Column::Seen => 80,
+                Column::RecentTcp => 111,
+                _ => width - 6,
+            };
             let column = LVCOLUMNW { mask: LVCF_TEXT | LVCF_WIDTH, cx: width, pszText: label.as_mut_ptr(), ..Default::default() };
             unsafe { SendMessageW(list, LVM_INSERTCOLUMNW, index, &column as *const _ as isize) };
         }
+        let details_label = label("Détail de la sélection")?;
         let details = control(
             window, w!("EDIT"), "", (ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL) as u32 | WS_VSCROLL, 0, true,
         )?;
-        let stop = control(window, w!("BUTTON"), "Terminer le processus…", 0, ID_STOP, false)?;
         let block = control(window, w!("BUTTON"), "Actions du port…", 0, ID_BLOCK, false)?;
+        let stop = control(window, w!("BUTTON"), "Terminer le processus…", 0, ID_STOP, false)?;
         let unblock = control(window, w!("BUTTON"), "Retirer le blocage", 0, ID_UNBLOCK, false)?;
-        let status = control(window, w!("STATIC"), "", 0, 0, false)?;
         let watches = control(window, w!("BUTTON"), "Relances (0)…", 0, ID_WATCHES, false)?;
+        let status = label("La croix masque OpenPort · Quitter depuis la zone de notification")?;
         unsafe { EnableWindow(watches, 0) };
         let started = Instant::now();
         let monitor = Monitor::start()?;
@@ -204,18 +230,23 @@ impl App {
         unsafe {
             SendMessageW(window, WM_SETICON, ICON_SMALL as usize, small_icon.handle as isize);
             SendMessageW(window, WM_SETICON, ICON_BIG as usize, large_icon.handle as isize);
+            SendMessageW(brand_icon, STM_SETICON, small_icon.handle as usize, 0);
         }
         let app = Self {
-            window, traffic_label, traffic_status, graph_detail, pause_graph, port_graph, timeline,
-            archive_size, save_archive, save_range, clear_archive, archive_toggle,
+            window, theme: RefCell::new(ui::Theme::new()), brand_icon, brand,
+            traffic_label, traffic_status, graph_detail, pause_graph, port_graph, timeline,
+            timeline_label, archive_panel, save_archive, save_range, clear_archive, archive_toggle,
             session, interval_label, interval, overview, levels, filter_label, filter, risk_filter,
-            refresh, list, details, stop, block, unblock, status, watches, started, shown_uptime: Cell::new(u64::MAX),
+            refresh, list, details_label, details, stop, block, unblock, status, watches, started,
+            shown_uptime: Cell::new(u64::MAX),
             system_directory: ports::system_directory().unwrap_or_default(),
             monitor, monitor_lost: Cell::new(false),
             traffic: RefCell::new(TrafficHistory::default()),
             archive: RefCell::new(None),
             archive_error: Cell::new(false),
             archive_enabled: Cell::new(false),
+            archive_open: Cell::new(false),
+            layout_width: Cell::new(0),
             pending_export: RefCell::new(None),
             paused: RefCell::new(None),
             graph_series: RefCell::new(None),
@@ -234,64 +265,151 @@ impl App {
             pending_stop: RefCell::new(None),
             pending_bulk: RefCell::new(None),
         };
+        app.apply_fonts();
         app.update_level_markers();
         app.update_timeline();
         Ok(app)
     }
 
     fn layout(&self) {
-        let mut client = RECT::default();
-        unsafe { GetClientRect(self.window, &mut client) };
-        let width = client.right;
-        let height = client.bottom;
-        let content = width - 32;
+        let layout = self.geometry();
+        let left = layout.plot.left;
+        let right = layout.plot.right;
+        let content = right - left;
+        let toolbar = layout.ports.top + 8;
+        let filter_width = (content / 5).clamp(170, 276);
+        let filter_left = right - 275 - filter_width;
+        let list_top = toolbar + 33;
+        let action_top = layout.details.top + 8;
+        let detail_top = action_top + 33;
         let controls = [
-            (self.traffic_label, 16, 14, 382, 22),
-            (self.session, width - 230, 14, 214, 22),
-            (self.interval_label, width - 378, 14, 51, 22),
-            (self.interval, width - 325, 10, 83, 170),
-            (self.traffic_status, 16, 36, content, 20),
-            (self.pause_graph, 16, 155, 110, 25),
-            (self.port_graph, 137, 155, 192, 24),
-            (self.timeline, 339, 153, width - 355, 30),
-            (self.archive_size, 16, 188, 155, 20),
-            (self.save_archive, 175, 182, 132, 26),
-            (self.save_range, 314, 182, 171, 26),
-            (self.clear_archive, 493, 182, 105, 26),
-            (self.archive_toggle, 614, 182, 166, 26),
-            (self.graph_detail, 16, 214, content, 20),
-            (self.overview, 16, 239, content - 156, 20),
-            (self.levels, width - 158, 234, 142, 24),
-            (self.filter_label, 16, 270, 46, 20),
-            (self.filter, 64, 263, width - 356, 28),
-            (self.risk_filter, width - 276, 263, 143, 150),
-            (self.refresh, width - 117, 262, 101, 30),
-            (self.list, 16, 303, content, height - 489),
-            (self.details, 16, height - 175, content, 101),
-            (self.stop, 16, height - 65, 154, 31),
-            (self.block, 180, height - 65, 152, 31),
-            (self.unblock, 343, height - 65, 145, 31),
-            (self.watches, 500, height - 65, 154, 31),
-            (self.status, 16, height - 26, content, 21),
+            (self.brand_icon, left, layout.header.top + 14, 16, 16),
+            (self.brand, left + 26, layout.header.top + 8, 182, 28),
+            (self.session, right - 420, layout.header.top + 9, 178, 26),
+            (self.interval_label, right - 237, layout.header.top + 9, 54, 26),
+            (self.interval, right - 181, layout.header.top + 11, 78, 170),
+            (self.refresh, right - 90, layout.header.top + 9, 90, 26),
+            (self.traffic_label, left, layout.graph.top + 4, content - 456, 28),
+            (self.port_graph, right - 442, layout.graph.top + 5, 177, 26),
+            (self.pause_graph, right - 260, layout.graph.top + 5, 82, 26),
+            (self.archive_panel, right - 170, layout.graph.top + 5, 170, 26),
+            (self.traffic_status, left, layout.plot.bottom + 4, content, 20),
+            (self.graph_detail, left, layout.plot.bottom + 23, content, 19),
+            (self.overview, left, toolbar, filter_left - left - 57, 25),
+            (self.filter_label, filter_left - 46, toolbar, 42, 25),
+            (self.filter, filter_left, toolbar, filter_width, 24),
+            (self.risk_filter, right - 266, toolbar, 130, 150),
+            (self.levels, right - 127, toolbar, 127, 25),
+            (self.list, left, list_top, content, layout.ports.bottom - list_top - ui::INSET),
+            (self.details_label, left, action_top, content - 553, 26),
+            (self.block, right - 538, action_top, 129, 26),
+            (self.stop, right - 401, action_top, 145, 26),
+            (self.unblock, right - 248, action_top, 125, 26),
+            (self.watches, right - 115, action_top, 115, 26),
+            (self.details, left, detail_top, content, layout.details.bottom - detail_top - ui::INSET),
+            (self.status, left, layout.status.top + 1, content, layout.status.bottom - layout.status.top - 2),
         ];
         for (control, x, y, w, h) in controls {
             unsafe { MoveWindow(control, x, y, w.max(1), h.max(1), 1) };
         }
-        let fixed_width: i32 = COLUMNS.iter().filter(|(column, _, _)| *column != table_view::Column::Process)
-            .map(|(_, _, width)| *width).sum();
-        let process_width = (content - fixed_width - 24).max(140);
-        unsafe { SendMessageW(self.list, LVM_SETCOLUMNWIDTH, 4, process_width as isize) };
-        self.invalidate_chart();
+        let archive = layout.archive.unwrap_or_default();
+        for (control, x, y, w, h) in [
+            (self.timeline_label, left, archive.top + 3, 140, 23),
+            (self.timeline, left + 147, archive.top + 2, content - 147, 25),
+            (self.archive_toggle, left, archive.top + 32, 176, 26),
+            (self.save_archive, left + 185, archive.top + 32, 134, 26),
+            (self.save_range, left + 327, archive.top + 32, 165, 26),
+            (self.clear_archive, left + 500, archive.top + 32, 99, 26),
+        ] {
+            unsafe {
+                if layout.archive.is_some() {
+                    MoveWindow(control, x, y, w.max(1), h, 1);
+                    ShowWindow(control, SW_SHOWNA);
+                } else {
+                    ShowWindow(control, SW_HIDE);
+                }
+            }
+        }
+        if self.layout_width.replace(content) != content {
+            let fixed_width: i32 = (0..COLUMNS.len()).filter(|index| *index != 4)
+                .map(|index| unsafe { SendMessageW(self.list, LVM_GETCOLUMNWIDTH, index, 0) as i32 }).sum();
+            let scrollbar = unsafe { GetSystemMetrics(SM_CXVSCROLL) };
+            let process_width = (content - fixed_width - scrollbar - 6).max(90);
+            unsafe { SendMessageW(self.list, LVM_SETCOLUMNWIDTH, 4, process_width as isize) };
+        }
+        unsafe { InvalidateRect(self.window, null(), 0) };
+    }
+
+    fn geometry(&self) -> ui::Layout {
+        ui::Layout::new(self.window, self.archive_open.get())
+    }
+
+    fn apply_fonts(&self) {
+        let theme = self.theme.borrow();
+        for control in [
+            self.session, self.interval_label, self.interval, self.refresh, self.pause_graph, self.port_graph,
+            self.archive_panel, self.traffic_status, self.graph_detail, self.timeline_label, self.archive_toggle,
+            self.save_archive, self.save_range, self.clear_archive, self.overview, self.filter_label, self.filter,
+            self.risk_filter, self.levels, self.list, self.details, self.block, self.stop, self.unblock,
+            self.watches, self.status,
+        ] {
+            unsafe { SendMessageW(control, WM_SETFONT, theme.body_font() as usize, 0) };
+        }
+        for control in [self.traffic_label, self.details_label] {
+            unsafe { SendMessageW(control, WM_SETFONT, theme.heading_font() as usize, 0) };
+        }
+        unsafe { SendMessageW(self.brand, WM_SETFONT, theme.display_font() as usize, 0) };
+    }
+
+    fn color_control(&self, dc: HDC, control: HWND) -> LRESULT {
+        let theme = self.theme.borrow();
+        let (ink, brush) = if [self.brand, self.brand_icon, self.session, self.interval_label].contains(&control) {
+            (theme.header_ink, theme.header_brush())
+        } else if control == self.status {
+            (theme.status_ink, theme.status_brush())
+        } else {
+            (theme.body_ink, theme.panel_brush())
+        };
+        unsafe {
+            SetTextColor(dc, ink);
+            SetBkMode(dc, TRANSPARENT as i32);
+        }
+        brush as LRESULT
+    }
+
+    fn draw_list_row(&self, draw: &mut NMLVCUSTOMDRAW) -> LRESULT {
+        match draw.nmcd.dwDrawStage {
+            CDDS_PREPAINT => CDRF_NOTIFYITEMDRAW as LRESULT,
+            CDDS_ITEMPREPAINT => {
+                let index = draw.nmcd.dwItemSpec;
+                let selected = unsafe { SendMessageW(self.list, LVM_GETITEMSTATE, index, LVIS_SELECTED as isize) } != 0;
+                if !selected && let Some(row) = self.rows.borrow().get(index)
+                    && let Some(tint) = self.theme.borrow().row_tint(row.level)
+                {
+                    draw.clrTextBk = tint;
+                }
+                CDRF_DODEFAULT as LRESULT
+            }
+            _ => CDRF_DODEFAULT as LRESULT,
+        }
     }
 
     fn chart_bounds(&self) -> RECT {
-        let mut client = RECT::default();
-        unsafe { GetClientRect(self.window, &mut client) };
-        RECT { left: 16, top: 58, right: client.right - 16, bottom: 149 }
+        self.geometry().plot
     }
 
     fn invalidate_chart(&self) {
         unsafe { InvalidateRect(self.window, &self.chart_bounds(), 0) };
+    }
+
+    fn paint_surface(&self, dc: HDC) {
+        let layout = self.geometry();
+        let theme = self.theme.borrow();
+        theme.paint(dc, &layout);
+        let archive = self.paused.borrow();
+        let live = self.traffic.borrow();
+        chart::paint(dc, theme.body_font(), layout.plot, archive.as_ref().unwrap_or(&live.points),
+            self.graph_pointer.get().map(|(x, _)| x), self.graph_series.borrow().as_deref(), archive.is_some());
     }
 
     fn selected(&self) -> Option<Entry> {
@@ -434,12 +552,18 @@ impl App {
             let point = chart::sample_at(points, bounds, series.is_some(), x)?;
             let age = format!("{:.1}", point.at.elapsed().as_secs_f64()).replace('.', ",");
             if let Some(socket) = chart::hovered_socket(point, points, bounds, series.as_deref(), y) {
-                detail = format!("TCP observé · {} · {} · {} établie(s) · {}",
+                detail = format!("{} · {} · {} établie(s) · {}",
                     socket.name, socket.endpoint, socket.established, socket.address);
                 if !socket.peer.is_empty() {
                     detail.push_str(&format!(" ↔ {}", socket.peer));
                     if socket.established > 1 {
                         detail.push_str(" (un correspondant)");
+                    }
+                }
+                if series.is_none() {
+                    let active = point.sockets.iter().filter(|socket| socket.established > 0).count();
+                    if active > 1 {
+                        detail.push_str(&format!(" · {} autre(s) port(s) TCP actif(s)", active - 1));
                     }
                 }
             } else {
@@ -475,7 +599,7 @@ impl App {
     fn toggle_graph_pause(&self) {
         if self.paused.borrow().is_some() {
             self.paused.replace(None);
-            set_text(self.pause_graph, "Pause graphe");
+            set_text(self.pause_graph, "Pause");
             self.update_timeline();
         } else {
             self.paused.replace(Some(self.traffic.borrow().points.clone()));
@@ -489,6 +613,9 @@ impl App {
         let selected = unsafe { SendMessageW(self.port_graph, BM_GETCHECK, 0, 0) } == BST_CHECKED as isize;
         if !selected && self.graph_series.borrow().is_none() {
             return;
+        }
+        if selected != self.graph_series.borrow().is_some() {
+            set_text(self.traffic_label, if selected { "Connexions TCP · 60 s" } else { "Trafic des interfaces · 60 s" });
         }
         let series = selected.then(|| {
             let mut series: Vec<_> = self.selected_entries().into_iter().filter_map(|entry| {
@@ -518,7 +645,11 @@ impl App {
         } else {
             format!("{size} o")
         };
-        set_text(self.archive_size, &format!("Disque · {}", label.replace('.', ",")));
+        let indicator = if self.archive_open.get() { "−" } else { "+" };
+        let caption = format!("Historique {indicator} · {}", label.replace('.', ","));
+        if window_text(self.archive_panel) != caption {
+            set_text(self.archive_panel, &caption);
+        }
         let last = length.saturating_sub(1).min(i32::MAX as usize) as isize;
         unsafe {
             EnableWindow(self.timeline, i32::from(length > 1));
@@ -530,6 +661,12 @@ impl App {
                 SendMessageW(self.timeline, TBM_SETPOS, 1, last);
             }
         }
+    }
+
+    fn toggle_archive_panel(&self) {
+        self.archive_open.set(!self.archive_open.get());
+        self.layout();
+        self.update_timeline();
     }
 
     fn toggle_archive(&self) {
@@ -557,7 +694,7 @@ impl App {
         self.traffic.borrow_mut().points.clear();
         self.paused.replace(None);
         self.graph_pointer.set(None);
-        set_text(self.pause_graph, "Pause graphe");
+        set_text(self.pause_graph, "Pause");
         if self.archive_enabled.get() {
             self.archive.replace(archive::Archive::open(self.started).ok());
         }
@@ -883,7 +1020,7 @@ impl App {
         }
 
         let overview = self.list_error.borrow().clone().unwrap_or_else(|| format!(
-            "{} à risque    ·    {} inconnus    ·    {} normaux    ·    {shown} / {total} affichés",
+            "Ports {shown}/{total}  ·  {} à risque  ·  {} inconnus  ·  {} normaux",
             counts[Risk::Elevated as usize], counts[Risk::Unknown as usize], counts[Risk::Normal as usize]
         ));
         set_text(self.overview, &overview);
@@ -1683,11 +1820,14 @@ unsafe extern "system" fn handle_message(window: HWND, message: u32, wparam: WPA
                 return 0;
             }
             WM_SIZE if wparam != SIZE_MINIMIZED as usize => app.layout(),
-            WM_SETTINGCHANGE => {
+            WM_SETTINGCHANGE | WM_SYSCOLORCHANGE => {
+                let previous = app.theme.replace(ui::Theme::new());
+                app.apply_fonts();
+                drop(previous);
                 app.update_level_markers();
-                app.invalidate_chart();
-                unsafe { InvalidateRect(app.list, null(), 1) };
+                unsafe { RedrawWindow(window, null(), null_mut(), RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN) };
             }
+            WM_CTLCOLORSTATIC => return app.color_control(wparam as HDC, lparam as HWND),
             WM_COMMAND => {
                 let id = wparam as u16;
                 let notification = (wparam >> 16) as u16;
@@ -1716,6 +1856,7 @@ unsafe extern "system" fn handle_message(window: HWND, message: u32, wparam: WPA
                     ID_WATCHES => app.watches_menu(),
                     ID_PAUSE_GRAPH => app.toggle_graph_pause(),
                     ID_PORT_GRAPH => app.update_graph_series(),
+                    ID_ARCHIVE_PANEL => app.toggle_archive_panel(),
                     ID_ARCHIVE_ENABLED => app.toggle_archive(),
                     ID_SAVE_ARCHIVE => app.save_history(false),
                     ID_SAVE_RANGE => app.save_history(true),
@@ -1730,6 +1871,7 @@ unsafe extern "system" fn handle_message(window: HWND, message: u32, wparam: WPA
                 let note = unsafe { &*(lparam as *const NMHDR) };
                 if note.hwndFrom == app.list {
                     match note.code {
+                        NM_CUSTOMDRAW => return app.draw_list_row(unsafe { &mut *(lparam as *mut NMLVCUSTOMDRAW) }),
                         LVN_ITEMCHANGED => app.update_selection(),
                         LVN_COLUMNCLICK => {
                             let click = unsafe { &*(lparam as *const NMLISTVIEW) };
@@ -1751,11 +1893,12 @@ unsafe extern "system" fn handle_message(window: HWND, message: u32, wparam: WPA
             WM_PAINT => {
                 let mut paint = PAINTSTRUCT::default();
                 let dc = unsafe { BeginPaint(window, &mut paint) };
-                let archive = app.paused.borrow();
-                let live = app.traffic.borrow();
-                chart::paint(dc, app.chart_bounds(), archive.as_ref().unwrap_or(&live.points),
-                    app.graph_pointer.get().map(|(x, _)| x), app.graph_series.borrow().as_deref(), archive.is_some());
+                app.paint_surface(dc);
                 unsafe { EndPaint(window, &paint) };
+                return 0;
+            }
+            WM_PRINTCLIENT => {
+                app.paint_surface(wparam as HDC);
                 return 0;
             }
             _ => {}
@@ -1911,6 +2054,22 @@ mod tests {
         assert_eq!(unsafe { SendMessageW(app.interval, CB_GETCURSEL, 0, 0) }, 1);
         assert!(app.archive.borrow().is_none());
         assert!(!app.archive_enabled.get());
+        let archive_visible = || unsafe { GetWindowLongPtrW(app.archive_toggle, GWL_STYLE) as u32 & WS_VISIBLE != 0 };
+        assert!(!archive_visible());
+        unsafe {
+            SetWindowPos(window, null_mut(), 0, 0, 900, 630, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER);
+            SendMessageW(window, WM_COMMAND, usize::from(ID_ARCHIVE_PANEL), 0);
+        }
+        assert!(archive_visible());
+        assert!(app.archive.borrow().is_none());
+        let mut list_body = RECT::default();
+        unsafe { GetClientRect(app.list, &mut list_body) };
+        assert!(list_body.bottom >= 73);
+        unsafe {
+            SendMessageW(window, WM_COMMAND, usize::from(ID_ARCHIVE_PANEL), 0);
+            SetWindowPos(window, null_mut(), 0, 0, 1100, 760, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER);
+        }
+        assert!(!archive_visible());
         unsafe {
             SendMessageW(app.archive_toggle, BM_SETCHECK, BST_CHECKED as usize, 0);
             SendMessageW(window, WM_COMMAND, usize::from(ID_ARCHIVE_ENABLED), 0);
@@ -1927,7 +2086,7 @@ mod tests {
         assert!(app.list_error.borrow().is_none());
         assert!(!app.traffic.borrow().points.is_empty());
         let chart = app.chart_bounds();
-        let pointer = ((chart.top + 20) as isize) << 16 | (chart.right - 88) as isize;
+        let pointer = ((chart.top + 20) as isize) << 16 | chart::plot(chart, false).right as isize;
         unsafe { SendMessageW(window, WM_MOUSEMOVE, 0, pointer) };
         assert!(window_text(app.traffic_status).starts_with("Il y a "));
         unsafe { SendMessageW(window, WM_MOUSELEAVE, 0, 0) };
