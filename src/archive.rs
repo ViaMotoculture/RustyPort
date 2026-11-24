@@ -74,6 +74,10 @@ impl Archive {
         data.write_all(&count.to_le_bytes())?;
         for socket in &point.sockets {
             data.write_all(&socket.established.to_le_bytes())?;
+            data.write_all(&[u8::from(socket.arrivals.is_some())])?;
+            if let Some(arrivals) = socket.arrivals {
+                data.write_all(&arrivals.to_le_bytes())?;
+            }
             for text in [&socket.key, &socket.name, &socket.endpoint, &socket.address, &socket.peer] {
                 let size = u32::try_from(text.len()).map_err(|_| invalid())?;
                 data.write_all(&size.to_le_bytes())?;
@@ -141,7 +145,7 @@ impl Archive {
 
     fn write_csv(&mut self, mut output: BufWriter<File>, range: Option<(u64, u64)>) -> io::Result<usize> {
         output.write_all(&[0xef, 0xbb, 0xbf])?;
-        writeln!(output, "session_ms;mesure_ms;type;recu_octets_s;envoye_octets_s;processus;port_protocole;adresse_locale;correspondant_tcp;tcp_etablies\r")?;
+        writeln!(output, "session_ms;mesure_ms;type;recu_octets_s;envoye_octets_s;processus;port_protocole;adresse_locale;correspondant_tcp;tcp_etablies;tcp_nouvelles_releve\r")?;
         let (first, last) = range.unwrap_or((0, u64::MAX));
         let total = self.data.metadata()?.len();
         let mut count = 0;
@@ -158,12 +162,13 @@ impl Archive {
             if let Some(rates) = point.rates {
                 let received = format!("{:.3}", rates.received).replace('.', ",");
                 let sent = format!("{:.3}", rates.sent).replace('.', ",");
-                writeln!(output, "{at};{span};Interfaces;{received};{sent};;;;;\r")?;
+                writeln!(output, "{at};{span};Interfaces;{received};{sent};;;;;;\r")?;
             } else {
-                writeln!(output, "{at};{span};Interfaces;;;;;;;\r")?;
+                writeln!(output, "{at};{span};Interfaces;;;;;;;;\r")?;
             }
             for socket in point.sockets {
-                writeln!(output, "{at};{span};TCP;;;{};{};{};{};{}\r", csv_field(&socket.name),
+                let arrivals = socket.arrivals.map_or_else(String::new, |count| count.to_string());
+                writeln!(output, "{at};{span};TCP;;;{};{};{};{};{};{arrivals}\r", csv_field(&socket.name),
                     csv_field(&socket.endpoint), csv_field(&socket.address), csv_field(&socket.peer), socket.established)?;
             }
             count += 1;
@@ -195,8 +200,13 @@ fn decode(at: Instant, bytes: &[u8]) -> io::Result<Point> {
     let mut sockets = Vec::new();
     for _ in 0..count {
         let established = u32::from_le_bytes(read(&mut input)?);
+        let arrivals = match read::<1>(&mut input)?[0] {
+            0 => None,
+            1 => Some(u32::from_le_bytes(read(&mut input)?)),
+            _ => return Err(invalid()),
+        };
         sockets.push(SocketActivity {
-            established, key: read_string(&mut input)?, name: read_string(&mut input)?,
+            established, arrivals, key: read_string(&mut input)?, name: read_string(&mut input)?,
             endpoint: read_string(&mut input)?, address: read_string(&mut input)?, peer: read_string(&mut input)?,
         });
     }
@@ -235,26 +245,38 @@ mod tests {
             archive.append(&Point {
                 at: start + Duration::from_secs(second),
                 span: Duration::from_millis(500),
-                rates: Some(Rates { sent: 20.0, received: second as f64 }),
+                rates: (second > 0).then_some(Rates { sent: 20.0, received: second as f64 }),
                 sockets: vec![SocketActivity {
                     key: "test".into(), name: "Serveur démo".into(), endpoint: "8514/TCP".into(),
                     address: "127.0.0.1".into(), peer: "127.0.0.1:12345".into(), established: second as u32,
+                    arrivals: match second {
+                        0 => None,
+                        1 => Some(0),
+                        _ => Some(3),
+                    },
                 }],
             }).unwrap();
         }
         let old = archive.page(2).unwrap();
         assert_eq!(old.len(), 3);
+        assert_eq!(old[0].socket("test").unwrap().arrivals, None);
+        assert_eq!(old[1].socket("test").unwrap().arrivals, Some(0));
         let point = old.back().unwrap();
         assert_eq!(point.socket("test").unwrap().established, 2);
+        assert_eq!(point.socket("test").unwrap().arrivals, Some(3));
         assert_eq!(point.rates.unwrap().received, 2.0);
         let latest = archive.page(80).unwrap();
         assert_eq!(latest.len(), 61);
         assert_eq!(latest.front().unwrap().socket("test").unwrap().established, 20);
         let mut reader = archive.reader().unwrap();
         let destination = archive.index_path.with_extension("test.csv");
-        assert_eq!(reader.export(&destination, Some((2000, 3000))).unwrap(), 2);
+        assert_eq!(reader.export(&destination, Some((0, 3000))).unwrap(), 4);
         let csv = fs::read_to_string(&destination).unwrap();
-        assert!(csv.contains("2000;500;TCP;;;\"Serveur démo\""));
+        assert!(csv.lines().all(|line| line.split(';').count() == 11));
+        assert!(csv.lines().next().unwrap().ends_with(";tcp_etablies;tcp_nouvelles_releve"));
+        assert!(csv.lines().any(|line| line.starts_with("0;500;TCP;") && line.ends_with(";0;")));
+        assert!(csv.lines().any(|line| line.starts_with("1000;500;TCP;") && line.ends_with(";1;0")));
+        assert!(csv.lines().any(|line| line.starts_with("2000;500;TCP;;;\"Serveur démo\"") && line.ends_with(";2;3")));
         assert!(csv.contains("3000;500;Interfaces;"));
         assert!(!csv.contains("4000;500;Interfaces;"));
         fs::remove_file(destination).unwrap();

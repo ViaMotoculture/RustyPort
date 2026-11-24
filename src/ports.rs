@@ -105,6 +105,7 @@ pub struct Port {
     pub owner: Owner,
     pub established: Arc<BTreeSet<TcpConnection>>,
     pub recent_tcp: Option<usize>,
+    pub tcp_arrivals: Option<u32>,
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -423,7 +424,7 @@ pub fn list() -> io::Result<Vec<Port>> {
         .into_iter()
         .map(|(endpoint, established)| Port {
             endpoint, owner: owners[&endpoint.pid].clone(),
-            established: Arc::new(established), recent_tcp: None,
+            established: Arc::new(established), recent_tcp: None, tcp_arrivals: None,
         })
         .collect())
 }

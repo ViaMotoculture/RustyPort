@@ -45,6 +45,7 @@ impl TcpActivity {
                     arrivals.pop_front();
                 }
                 let arrived = port.established.difference(&last.established).count();
+                port.tcp_arrivals = Some(arrived as u32);
                 if arrived > 0 {
                     arrivals.push_back((at, arrived));
                 }
@@ -82,6 +83,7 @@ impl Reading {
                 address: port.endpoint.address_label(),
                 peer: port.established.iter().next().map_or_else(String::new, |peer| peer.peer_label()),
                 established: port.established.len() as u32,
+                arrivals: port.tcp_arrivals,
             }).collect::<Vec<_>>();
         sockets.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         (self.at, self.ports, history.record(self.at, self.interfaces, sockets))
@@ -230,6 +232,7 @@ pub struct SocketActivity {
     pub address: String,
     pub peer: String,
     pub established: u32,
+    pub arrivals: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -298,26 +301,35 @@ mod tests {
     fn tcp_activity_counts_changed_connections_at_the_same_total_and_expires() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
-        let observe = |history: &mut TcpActivity, now| {
+        let mut samples = TrafficHistory::default();
+        let mut observe = |history: &mut TcpActivity, now| {
             let mut ports = ports::list().unwrap();
             history.update(now, &mut ports);
-            let listener = ports.into_iter().find(|port| {
+            let (_, ports, _) = Reading { at: now, ports: Ok(ports), interfaces: Ok(HashMap::new()) }
+                .apply(&mut samples);
+            let listener = ports.unwrap().into_iter().find(|port| {
                 port.endpoint.port == address.port() && port.endpoint.address == address.ip()
                     && port.endpoint.pid == std::process::id() && port.endpoint.protocol == Protocol::Tcp
             }).unwrap();
-            (listener.established.len(), listener.recent_tcp)
+            let sample = samples.points.back().unwrap().socket(&listener.graph_key()).unwrap();
+            assert_eq!(sample.arrivals, listener.tcp_arrivals);
+            (sample.established, listener.recent_tcp, sample.arrivals)
         };
         let mut history = TcpActivity::default();
         let start = Instant::now();
         let first = TcpStream::connect(address).unwrap();
         let (first_peer, _) = listener.accept().unwrap();
-        assert_eq!(observe(&mut history, start), (1, None));
+        assert_eq!(observe(&mut history, start), (1, None, None));
         let second = TcpStream::connect(address).unwrap();
         let (second_peer, _) = listener.accept().unwrap();
         drop((first, first_peer));
-        assert_eq!(observe(&mut history, start + POLL_INTERVAL), (1, Some(1)));
-        assert_eq!(observe(&mut history, start + POLL_INTERVAL * 2), (1, Some(1)));
-        assert_eq!(observe(&mut history, start + TCP_ACTIVITY_WINDOW + POLL_INTERVAL), (1, Some(0)));
+        assert_eq!(observe(&mut history, start + POLL_INTERVAL), (1, Some(1), Some(1)));
+        assert_eq!(observe(&mut history, start + POLL_INTERVAL * 2), (1, Some(1), Some(0)));
+        let expired = start + TCP_ACTIVITY_WINDOW + POLL_INTERVAL;
+        assert_eq!(observe(&mut history, expired), (1, Some(0), Some(0)));
+        history.update(expired + POLL_INTERVAL, &mut []);
+        assert_eq!(observe(&mut history, expired + POLL_INTERVAL * 2), (1, None, None));
+        assert_eq!(observe(&mut history, expired + POLL_INTERVAL * 3), (1, Some(0), Some(0)));
         drop((second, second_peer));
     }
 

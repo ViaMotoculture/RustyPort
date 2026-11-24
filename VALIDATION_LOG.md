@@ -136,3 +136,19 @@
   ont disparu. Les relevés ont repris à la relance avec archivage désactivé.
 - Windows a trouvé le groupe d'icônes dans `RustyPort.exe`.
   SHA-256 `3DDAFC1F4EBDFF2D8029BF7E99F01CAA755A443BDAA214011D4BBDC9563F08F1`.
+
+## 2026-11-24 - Nouvelles connexions par port
+
+- Les 18 tests ont réussi en développement et en version optimisée.
+  Le test TCP réel remplace une connexion par une autre. Le nombre
+  d'établies reste à 1 et le compteur d'arrivées détecte le remplacement.
+  Le premier relevé et un port absent laissent la valeur indisponible.
+- L'archive et le CSV distinguent zéro arrivée d'une mesure indisponible.
+  Une charge à 250 ms avec 600 connexions TCP et 360 datagrammes UDP
+  locaux a produit 80 lignes de test avec une établie et au moins une
+  arrivée. La pause, les exports bornés et le nettoyage ont été vérifiés.
+- À 900 × 630, la fenêtre hors écran a affiché quatre pics d'arrivées
+  et une ligne stable à une connexion établie pour le même port fictif.
+  Le rendu GDI des deux modes a aussi été contrôlé en mémoire.
+- Windows a trouvé le groupe d'icônes dans `RustyPort.exe`.
+  SHA-256 `862A0B1A6C8D5673B913B43BFFD1E7AF599E527988D35FD69E5AFD4D8EE75045`.

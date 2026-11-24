@@ -136,16 +136,18 @@ correspond à un intervalle mesuré. Un intervalle indisponible laisse un
 trou dans le graphique. Les débits sont globaux. Le détail UDP indique
 que l'activité par port est indisponible.
 
-Survole le graphique pour lire les débits ou les connexions TCP du relevé,
-le nom du processus, le port et un correspondant quand il est disponible.
-« Ports TCP sélectionnés » trace une courbe par port TCP sélectionné.
-La légende indique la couleur de chaque courbe, qui mesure le nombre de
-connexions établies. Le graphique des interfaces mesure les octets reçus
-et envoyés à l'échelle des interfaces.
+Survole le graphique pour lire la valeur du relevé, le nom du processus,
+le port et un correspondant quand il est disponible.
+« Ports TCP sélectionnés » donne le choix entre deux mesures par port.
+« Nouvelles connexions » affiche les arrivées détectées entre deux relevés
+sous forme de pics. « Connexions établies » indique combien de connexions
+étaient ouvertes au relevé. Une ligne plate indique que ce nombre reste
+stable. Le débit des interfaces est exprimé en octets par seconde.
 
-Les ports qui ont eu une connexion sur la période affichée apparaissent
+Les ports dont la mesure est non nulle sur la période affichée apparaissent
 en premier dans la légende. Les ports mesurés à zéro partagent un tracé
-et ceux sans relevé sont comptés séparément.
+et ceux sans relevé sont comptés séparément. Une nouvelle connexion
+ouverte et refermée entre deux relevés peut manquer.
 
 Si des courbes se superposent au survol, RustyPort indique les autres ports
 sur la même position. Dans la vue des débits, la ligne « TCP au même
@@ -158,8 +160,10 @@ pour enregistrer les prochains relevés. La case est décochée au lancement.
 La barre « Parcourir les relevés » donne accès aux pages enregistrées.
 Décoche la case pour suspendre les écritures. « Nettoyer… » efface les
 relevés temporaires après confirmation. Les commandes de sauvegarde
-exportent toute la session ou une période au format CSV. Les bornes de
-période sont relatives au lancement.
+exportent toute la session ou une période au format CSV. La colonne
+`tcp_nouvelles_releve` reste vide lors du premier relevé d'un port ou
+lorsque la référence précédente est indisponible. Les bornes de période
+sont relatives au lancement.
 
 La croix masque la fenêtre. Un clic sur l'icône RustyPort près de l'horloge
 ou un nouveau lancement rouvre la fenêtre. « Quitter » termine l'application

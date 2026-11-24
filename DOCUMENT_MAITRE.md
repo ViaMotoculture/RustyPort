@@ -92,3 +92,10 @@ Windows qui les exigent. Le projet est un utilitaire de poste de travail.
 - La surveillance des relances se borne au chemin exact d'une application
   de l'utilisateur. Une relance est arrêtée au relevé suivant. Elle prend
   fin à l'échéance, sur annulation ou quand RustyPort quitte réellement.
+
+
+## Historique public et préférences
+
+Les anciennes adresses Git ont été neutralisées et les identifiants des commits réécrits ont changé. Les anciens identifiants cités dans le journal peuvent ne plus correspondre à une branche.
+
+Les préférences s'enregistrent sous `%LOCALAPPDATA%/RustyPort` et ne sont pas migrées depuis l'ancien dossier. GitHub Secret scanning et Push protection sont activés.

@@ -84,6 +84,8 @@
   ceux restés à zéro lors d'une sélection de plusieurs ports.
 - Effacer le fond du détail à son redessin et limiter les redessins
   de la liste et du graphique lors des relevés.
+- Offrir deux mesures par port TCP. Afficher les nouvelles connexions
+  observées sous forme de pics et garder la vue des connexions établies.
 
 ## À valider
 
