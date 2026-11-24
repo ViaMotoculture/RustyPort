@@ -1,0 +1,62 @@
+OpenPort — Ports et protocoles
+RustyPort
+
+Lire les ports dans OpenPort
+
+Un port désigne un point de communication sur une machine. Une entrée
+OpenPort indique le numéro, le protocole, l’adresse locale et le processus
+qui l’utilise. Le PID identifie le processus en cours d’exécution.
+
+TCP établit une connexion et remet les données dans l’ordre. OpenPort
+affiche les ports TCP en écoute, prêts à recevoir de nouvelles connexions.
+Référence TCP (RFC 9293) — https://www.rfc-editor.org/rfc/rfc9293.html
+
+UDP transmet des datagrammes. Ceux-ci peuvent arriver en désordre ou se
+perdre. OpenPort affiche les sockets UDP liées à un port local. Certaines
+servent à recevoir, d’autres à envoyer, et certaines font les deux.
+Référence UDP (RFC 768) — https://www.rfc-editor.org/rfc/rfc768.html
+
+L’adresse locale indique où le programme utilise le port.
+
+  127.0.0.1 et ::1   Ce PC uniquement, via l’adresse de bouclage
+  0.0.0.0            Toutes les adresses IPv4 locales
+  ::                 Adresse générique IPv6
+  192.168.x.x        Exemple d’adresse d’une interface du réseau local
+
+L’accès depuis un autre appareil dépend aussi des règles de pare-feu et
+de la configuration du réseau.
+Adresses locales Windows — https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-bind
+
+Ports courants
+
+  Port et protocole    Usage habituel
+  22/TCP               SSH, administration à distance
+  53/TCP et UDP        DNS, résolution de noms
+  67 et 68/UDP         DHCPv4, attribution d’adresses sur le réseau
+  80/TCP               HTTP
+  443/TCP              HTTPS sur TCP
+  443/UDP              HTTP/3 sur QUIC, selon la configuration du serveur
+  445/TCP              SMB, partage de fichiers Windows
+  3306/TCP             MySQL
+  3389/TCP et UDP      Bureau à distance Windows
+  5353/UDP             mDNS, résolution de noms sur le réseau local
+  5432/TCP             PostgreSQL
+  6379/TCP             Redis
+
+Le numéro donne un indice. Pour identifier l’usage sur ton PC, regarde le
+processus, son exécutable et les services indiqués après sélection.
+Registre IANA — https://www.iana.org/assignments/service-names-port-numbers
+Référence HTTP/3 (RFC 9114) — https://www.rfc-editor.org/rfc/rfc9114.html
+
+Les actions dans OpenPort
+
+• Terminer le processus arrête le programme et toutes ses connexions.
+  Windows libère les ports qu’il détenait.
+• Bloquer le trafic entrant ajoute une règle du Pare-feu Windows pour
+  le numéro et le protocole choisis. Windows demande les droits
+  administrateur pour cette modification.
+• Retirer le blocage supprime la règle créée par OpenPort. Si le port ne
+  figure plus dans la liste, saisis son numéro dans le filtre, clique sur
+  Retirer le blocage et choisis TCP ou UDP.
+
+Règles du Pare-feu Windows — https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/rules
