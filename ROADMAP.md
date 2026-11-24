@@ -76,6 +76,8 @@
 - Rapprocher les filtres du tableau et les actions du détail de la sélection.
 - Replier le volet d'historique au lancement et laisser visible l'espace
   disque utilisé.
+- Revenir en tête de liste après un tri explicite en conservant la
+  sélection et signaler les ports dont les courbes se superposent.
 
 ## À valider
 

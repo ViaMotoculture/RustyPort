@@ -84,7 +84,8 @@ Règles du Pare-feu Windows — https://learn.microsoft.com/fr-fr/windows/securi
 Surveiller et trier
 
 Clique sur un en-tête pour trier, puis une seconde fois pour inverser le
-tri. La flèche indique le sens. La liste démarre avec les ports à risque
+tri. La flèche indique le sens. Un clic ramène la liste au premier résultat
+et conserve la sélection. La liste démarre avec les ports à risque
 en haut. Le menu des niveaux filtre cette liste et peut se combiner avec
 la recherche. Le menu « Cadence » règle la fréquence de 250 ms à 10 s,
 avec 500 ms par défaut. Les durées réelles varient selon le temps de collecte.
@@ -132,6 +133,11 @@ le nom du processus, le port et un correspondant quand il est disponible.
 La légende indique la couleur de chaque courbe, qui mesure le nombre de
 connexions établies. Le graphique des interfaces mesure les octets reçus
 et envoyés à l'échelle des interfaces.
+
+Si des courbes se superposent au survol, OpenPort indique les autres ports
+sur la même position. Dans la vue des débits, la ligne « TCP au même
+relevé » signale une connexion observée au moment de la mesure. Le débit
+reste celui des interfaces.
 
 « Pause » fige la vue pendant les relevés. Le bouton « Historique » indique
 l'espace disque occupé et ouvre le volet. Coche « Archivage sur disque »

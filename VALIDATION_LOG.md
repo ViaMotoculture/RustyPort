@@ -69,3 +69,19 @@
 - Windows a trouvé le groupe d'icônes dans l'exécutable de livraison.
   SHA-256
   `B5674B9C15A5855D6BAA33EA65F449DFF6EF29EA0656A7AC532A22BA8D752C69`.
+
+## 2026-11-24 - Tri et survol du graphique
+
+- Le test Win32 vérifie le retour au premier résultat après le tri,
+  la sélection conservée et le maintien de la position après un défilement
+  lors des relevés automatiques.
+- Un test de survol retrouve deux ports sur une même position du graphique.
+  Les 14 tests, la vérification de toutes les cibles et la compilation de
+  l'exécutable de livraison sous Windows ont réussi.
+- Une instance hors écran a vérifié le tri par activité, le retour en tête
+  après inversion et le texte de survol pour les courbes superposées et
+  les débits globaux. L'en-tête d'activité et sa flèche restent visibles
+  à 900 × 630.
+- Windows a trouvé le groupe d'icônes dans le binaire de livraison.
+  SHA-256
+  `592BBB18A024512530C5CB7E4023475625EA7A86DE346CF1686C48AAD2D4EEC2`.

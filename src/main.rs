@@ -207,7 +207,7 @@ impl App {
                 Column::Process => width,
                 Column::Protocol => 67,
                 Column::Seen => 80,
-                Column::RecentTcp => 111,
+                Column::RecentTcp => 124,
                 _ => width - 6,
             };
             let column = LVCOLUMNW { mask: LVCF_TEXT | LVCF_WIDTH, cx: width, pszText: label.as_mut_ptr(), ..Default::default() };
@@ -551,7 +551,8 @@ impl App {
         let hovered = self.graph_pointer.get().and_then(|(x, y)| {
             let point = chart::sample_at(points, bounds, series.is_some(), x)?;
             let age = format!("{:.1}", point.at.elapsed().as_secs_f64()).replace('.', ",");
-            if let Some(socket) = chart::hovered_socket(point, points, bounds, series.as_deref(), y) {
+            let sockets = chart::hovered_sockets(point, points, bounds, series.as_deref(), y);
+            if let Some(socket) = sockets.first() {
                 detail = format!("{} · {} · {} établie(s) · {}",
                     socket.name, socket.endpoint, socket.established, socket.address);
                 if !socket.peer.is_empty() {
@@ -561,6 +562,7 @@ impl App {
                     }
                 }
                 if series.is_none() {
+                    detail.insert_str(0, "TCP au même relevé · ");
                     let active = point.sockets.iter().filter(|socket| socket.established > 0).count();
                     if active > 1 {
                         detail.push_str(&format!(" · {} autre(s) port(s) TCP actif(s)", active - 1));
@@ -570,7 +572,16 @@ impl App {
                 detail = "Aucune connexion TCP correspondante au relevé.".into();
             }
             let label = if series.is_some() {
-                format!("Il y a {age} s · Connexions TCP établies au relevé")
+                let mut label = format!("Il y a {age} s · Connexions TCP établies");
+                if sockets.len() > 1 {
+                    let others = sockets.iter().skip(1).take(2).map(|socket| socket.endpoint.as_str())
+                        .collect::<Vec<_>>().join(", ");
+                    let _ = write!(label, " · Courbes superposées avec {others}");
+                    if sockets.len() > 3 {
+                        let _ = write!(label, " (+ {})", sockets.len() - 3);
+                    }
+                }
+                label
             } else if let Some(rates) = point.rates {
                 let span = format!("{:.2}", point.span.as_secs_f64()).replace('.', ",");
                 format!("Il y a {age} s · Reçu {} · Envoyé {} · Mesure sur {span} s",
@@ -924,11 +935,15 @@ impl App {
         if let Some(&(column, _, _)) = COLUMNS.get(index) {
             self.sort.set(self.sort.get().select(column));
             self.set_sort_header();
-            self.populate();
+            self.populate_rows(false);
         }
     }
 
     fn populate(&self) {
+        self.populate_rows(true);
+    }
+
+    fn populate_rows(&self, preserve_viewport: bool) {
         let query = window_text(self.filter).to_lowercase();
         let selected_level = unsafe { SendMessageW(self.risk_filter, CB_GETCURSEL, 0, 0) };
         let risk_filter = Risk::LEVELS.get(selected_level.saturating_sub(1) as usize).copied();
@@ -962,14 +977,18 @@ impl App {
         }
         self.drawing_list.set(true);
         unsafe { SendMessageW(self.list, WM_SETREDRAW, 0, 0) };
-        let top = if rebuild {
-            let top = unsafe { SendMessageW(self.list, LVM_GETTOPINDEX, 0, 0) } as usize;
-            let key = old.get(top).map(|row| row.key);
-            unsafe { SendMessageW(self.list, LVM_DELETEALLITEMS, 0, 0) };
-            key.and_then(|key| rows.iter().position(|row| row.key == key))
+        let top = if !preserve_viewport {
+            Some(0)
+        } else if rebuild {
+            let current = unsafe { SendMessageW(self.list, LVM_GETTOPINDEX, 0, 0) } as usize;
+            let kept_row = (current > 0).then_some(current).and_then(|index| old.get(index));
+            Some(kept_row.and_then(|previous| rows.iter().position(|row| row.key == previous.key)).unwrap_or(0))
         } else {
             None
         };
+        if rebuild {
+            unsafe { SendMessageW(self.list, LVM_DELETEALLITEMS, 0, 0) };
+        }
         for (index, row) in rows.iter().enumerate() {
             for (column, value) in row.fields.iter().enumerate() {
                 if !rebuild && *value == old[index].fields[column] {
@@ -1001,11 +1020,13 @@ impl App {
                 }
             }
         }
-        if let Some(top) = top.filter(|top| *top != 0) {
+        if let Some(top) = top {
+            let current = unsafe { SendMessageW(self.list, LVM_GETTOPINDEX, 0, 0) } as i32;
+            let delta = top as i32 - current;
             let mut rect = RECT { left: LVIR_BOUNDS as i32, ..Default::default() };
             unsafe {
-                if SendMessageW(self.list, LVM_GETITEMRECT, 0, &mut rect as *mut _ as isize) != 0 {
-                    let pixels = (rect.bottom - rect.top).saturating_mul(top as i32);
+                if delta != 0 && SendMessageW(self.list, LVM_GETITEMRECT, 0, &mut rect as *mut _ as isize) != 0 {
+                    let pixels = (rect.bottom - rect.top).saturating_mul(delta);
                     SendMessageW(self.list, LVM_SCROLL, 0, pixels as isize);
                 }
             }
@@ -2216,6 +2237,35 @@ mod tests {
         }
         assert!(app.rows.borrow().iter().all(|row| row.level == Risk::Elevated));
         assert!(app.selected().is_none());
+
+        let template = app.ports.borrow().iter().find(|entry| entry.port.endpoint.port == a.port()).unwrap().clone();
+        let fixtures = |first| (first..50_050).map(|number| {
+            let mut port = template.port.clone();
+            port.endpoint.port = number;
+            Entry::new(port, template.first_seen, template.assessment.clone())
+        }).collect();
+        let top_index = || unsafe { SendMessageW(app.list, LVM_GETTOPINDEX, 0, 0) as usize };
+        let top_port = || app.rows.borrow()[top_index()].key.0.port;
+        app.sort.set(Sort { column: table_view::Column::Port, descending: false });
+        unsafe { SendMessageW(app.risk_filter, CB_SETCURSEL, 0, 0) };
+        app.ports.replace(fixtures(50_002));
+        app.populate();
+        assert_eq!(top_port(), 50_002);
+
+        app.ports.replace(fixtures(50_000));
+        app.populate();
+        assert_eq!(top_port(), 50_000);
+        unsafe { SendMessageW(app.list, LVM_ENSUREVISIBLE, 27, 0) };
+        assert!(top_index() > 0);
+        let scrolled_port = top_port();
+        app.ports.replace(fixtures(49_998));
+        app.populate();
+        assert_eq!(top_port(), scrolled_port);
+
+        app.set_row_state(top_index(), LVIS_SELECTED, LVIS_SELECTED);
+        app.sort_by(1);
+        assert_eq!(top_port(), 50_049);
+        assert_eq!(app.selected().unwrap().port.endpoint.port, scrolled_port);
         unsafe { DestroyWindow(window) };
     }
 }

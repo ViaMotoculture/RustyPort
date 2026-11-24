@@ -76,16 +76,21 @@ fn selection_scale(points: &VecDeque<Point>, selection: &[Series]) -> f64 {
         .fold(1.0, f64::max)
 }
 
-pub fn hovered_socket<'a>(
+pub fn hovered_sockets<'a>(
     point: &'a Point, points: &VecDeque<Point>, bounds: RECT, selection: Option<&[Series]>, y: i32,
-) -> Option<&'a SocketActivity> {
+) -> Vec<&'a SocketActivity> {
     if let Some(selection) = selection {
         let plot = plot(bounds, true);
         let scale = selection_scale(points, selection);
-        selection.iter().rev().filter_map(|series| point.socket(&series.key))
-            .min_by_key(|socket| y_position(plot, scale, f64::from(socket.established)).abs_diff(y))
+        let selected_sockets = || selection.iter().rev().filter_map(|series| point.socket(&series.key));
+        let height = |socket: &SocketActivity| y_position(plot, scale, f64::from(socket.established));
+        let Some(nearest) = selected_sockets().map(height).min_by_key(|position| position.abs_diff(y)) else {
+            return Vec::new();
+        };
+        selected_sockets().filter(|socket| height(socket) == nearest).collect()
     } else {
         point.sockets.iter().filter(|socket| socket.established > 0).max_by_key(|socket| socket.established)
+            .into_iter().collect()
     }
 }
 
@@ -257,4 +262,33 @@ unsafe fn draw_series(
 unsafe fn paint_text(dc: HDC, x: i32, y: i32, label: &str) {
     let label = wide(label);
     unsafe { TextOutW(dc, x, y, label.as_ptr(), (label.len() - 1) as i32) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn hover_identifies_overlapping_curves_for_selected_ports() {
+        let sockets = [("443/TCP", 0), ("8514/TCP", 0), ("9000/TCP", 1)].map(|(endpoint, established)| {
+            SocketActivity {
+                key: endpoint.into(), endpoint: endpoint.into(), established,
+                name: String::new(), address: String::new(), peer: String::new(),
+            }
+        });
+        let selection = sockets.iter().map(|socket| Series {
+            key: socket.key.clone(), label: socket.endpoint.clone(),
+        }).collect::<Vec<_>>();
+        let points = VecDeque::from([Point {
+            at: Instant::now(), rates: None, span: Duration::ZERO, sockets: sockets.into(),
+        }]);
+        let point = points.back().unwrap();
+        let bounds = RECT { left: 0, top: 0, right: 800, bottom: 150 };
+        let plot = plot(bounds, true);
+        let ports = |y| hovered_sockets(point, &points, bounds, Some(&selection), y)
+            .into_iter().map(|socket| socket.endpoint.as_str()).collect::<Vec<_>>();
+        assert_eq!(ports(plot.bottom), ["8514/TCP", "443/TCP"]);
+        assert_eq!(ports(plot.top), ["9000/TCP"]);
+    }
 }
