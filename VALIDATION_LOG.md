@@ -183,3 +183,23 @@
   tiennent à la taille minimale.
 - L'exécutable de test avec son icône a pour SHA-256
   `17E82F2B71E85005601401A9FBB7B86DE35B7369245088C084BD6C30B9994DDB`.
+
+## 2026-11-24 - Fermeture de RustyPort et élévation au lancement
+
+- `cargo check --all-targets --locked` et la compilation de livraison
+  réussissent. Les 26 tests ordinaires passent en version optimisée.
+  Le test de collecte ETW avec les droits Windows reste à exécuter.
+- Sur des instances Windows isolées, la croix laisse les relevés actifs.
+  Le menu « Quitter RustyPort » arrête le processus en 6 ms en temps normal
+  et en 1 503 ms avec un nettoyage du moniteur bloqué pendant 10 s.
+  Les fichiers temporaires de session disparaissent dans les deux cas.
+  La zone de notification de l’Explorateur reste à vérifier en session
+  interactive.
+- Avec un export CSV retardé de 2,5 s, « Quitter RustyPort » conserve
+  le message d’attente jusqu’à l’écriture complète puis ferme le processus.
+  Le CSV contient 106 lignes et aucun fichier partiel ne reste sur disque.
+- L’inspection de l’exécutable confirme l’icône et le manifeste
+  `requireAdministrator` avec `uiAccess=false`. Un lancement direct
+  sans élévation reçoit le code Windows 740, élévation requise.
+- Le binaire de livraison a pour SHA-256
+  `CB34648C26220D16072135BE1FE98245389535FA46728062DA1E1FEE3A744E46`.

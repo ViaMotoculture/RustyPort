@@ -280,8 +280,9 @@ impl Monitor {
         lock_watches(&self.watches).retain(|watch| !watch.image.eq_ignore_ascii_case(image));
     }
 
-    pub fn clear_watches(&self) {
-        lock_watches(&self.watches).clear();
+    pub fn request_shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        self.refresh();
     }
 
     pub fn poll(&self) -> Result<Option<Reading>, TryRecvError> {
@@ -295,9 +296,8 @@ impl Monitor {
 
 impl Drop for Monitor {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
         self.readings.take();
-        self.refresh();
+        self.request_shutdown();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }

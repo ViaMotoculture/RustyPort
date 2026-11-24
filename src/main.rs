@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, TerminateProcess};
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, GetKeyState, IsWindowEnabled, ReleaseCapture, SetCapture, SetFocus,
@@ -73,6 +73,7 @@ const SS_ENDELLIPSIS: u32 = 0x4000;
 const EXIT_MENU: usize = 450;
 const FIREWALL_TIMER: usize = 1;
 const MONITOR_TIMER: usize = 2;
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(1500);
 // Keep the singleton identifiers shared with existing OpenPort executables.
 const SINGLETON_CLASS: PCWSTR = w!("OpenPortWindow");
 const SINGLETON_MUTEX: PCWSTR = w!("Local\\RustyPort.OpenPort");
@@ -143,6 +144,7 @@ struct App {
     archive_open: Cell<bool>,
     layout_width: Cell<i32>,
     pending_export: RefCell<Option<Receiver<io::Result<usize>>>>,
+    quit_requested: Cell<bool>,
     paused: RefCell<Option<VecDeque<Point>>>,
     graph_series: RefCell<Option<Vec<chart::Series>>>,
     live_traffic: RefCell<String>,
@@ -275,6 +277,7 @@ impl App {
             archive_open: Cell::new(false),
             layout_width: Cell::new(0),
             pending_export: RefCell::new(None),
+            quit_requested: Cell::new(false),
             paused: RefCell::new(None),
             graph_series: RefCell::new(None),
             live_traffic: RefCell::new("Mesure du débit en cours…".into()),
@@ -917,15 +920,34 @@ impl App {
             _ => return,
         };
         self.pending_export.replace(None);
+        if self.quit_requested.get() {
+            self.finish_quit();
+            return;
+        }
         self.update_timeline();
         set_text(self.status, &message);
     }
 
     fn quit(&self) {
-        if self.pending_export.borrow().is_some() {
-            unsafe { MessageBoxW(self.window, w!("La sauvegarde CSV est en cours. Réessaie après la fin de l’export."),
-                w!("RustyPort"), MB_OK | MB_ICONINFORMATION) };
+        if self.quit_requested.replace(true) {
             return;
+        }
+        if self.pending_export.borrow().is_some() {
+            set_text(self.status, "RustyPort se fermera après la sauvegarde CSV.");
+            return;
+        }
+        self.finish_quit();
+    }
+
+    fn finish_quit(&self) {
+        // The export has released its temporary file. Bound shutdown even if native cleanup hangs.
+        let watchdog = std::thread::Builder::new().name("rustyport-quit".into()).spawn(|| {
+            std::thread::sleep(SHUTDOWN_GRACE);
+            force_exit();
+        });
+        if watchdog.is_err() {
+            self.tray.remove();
+            force_exit();
         }
         unsafe { DestroyWindow(self.window) };
     }
@@ -1002,6 +1024,9 @@ impl App {
 
     fn poll_monitor(&self) {
         self.poll_export();
+        if self.quit_requested.get() {
+            return;
+        }
         self.poll_stop();
         self.poll_bulk_stop();
         let elapsed = self.started.elapsed();
@@ -2093,8 +2118,8 @@ unsafe extern "system" fn handle_message(window: HWND, message: u32, wparam: WPA
     let app = unsafe { (GetWindowLongPtrW(window, GWLP_USERDATA) as *const App).as_ref() };
     if message == WM_DESTROY {
         if let Some(app) = app {
+            app.monitor.request_shutdown();
             app.tray.remove();
-            app.monitor.clear_watches();
         }
         unsafe { PostQuitMessage(0) };
         return 0;
@@ -2311,6 +2336,11 @@ fn run() -> io::Result<()> {
             }
         }
     }
+}
+
+fn force_exit() -> ! {
+    unsafe { TerminateProcess(GetCurrentProcess(), 0) };
+    std::process::exit(0);
 }
 
 fn main() {

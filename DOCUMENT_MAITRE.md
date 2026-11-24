@@ -56,12 +56,12 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-Le binaire Cargo est `target/release/rustyport.exe`. Pour intégrer l'icône
-de l'Explorateur à un binaire de livraison, copier le binaire puis exécuter
-`target/release/rustyport.exe --embed-icon <copie.exe>` sur la copie.
-L'application fonctionne
-sans élévation pour la lecture et demande les droits nécessaires aux actions
-Windows qui les exigent. Le projet est un utilitaire de poste de travail.
+Le binaire Cargo est `target/release/rustyport.exe`. Pour préparer un binaire
+de livraison, copier le binaire puis exécuter
+`target/release/rustyport.exe --embed-icon <copie.exe>` sur la copie. Cette
+commande intègre l’icône de l’Explorateur et le manifeste qui demande
+l’autorisation administrateur au lancement. Le projet est un utilitaire de
+poste de travail.
 
 ## Décisions
 

@@ -17,7 +17,7 @@ RustyPort est un utilitaire Windows écrit en Rust avec une interface Win32. Il 
 Le graphique couvre les 60 dernières secondes. « Ports sélectionnés » ouvre la vue **Connexions établies** par défaut. Le menu voisin permet de choisir la mesure.
 
 - **Débit des interfaces** affiche les octets reçus et envoyés par seconde, cumulés sur les interfaces actives hors bouclage.
-- **Débit par port** affiche une courbe en octets par seconde par port TCP ou UDP sélectionné. La courbe additionne les octets reçus et envoyés rapportés par Windows. Le survol détaille les deux sens. La collecte utilise des fenêtres d’au moins une seconde et demande les droits de capture de Windows. Si l’accès est refusé, lancez RustyPort en tant qu’administrateur.
+- **Débit par port** affiche une courbe en octets par seconde par port TCP ou UDP sélectionné. La courbe additionne les octets reçus et envoyés rapportés par Windows. Le survol détaille les deux sens. La collecte utilise des fenêtres d’au moins une seconde et demande les droits de capture de Windows.
 - **Nouvelles connexions** affiche un pic pour chaque relevé où de nouvelles connexions TCP ont été observées. Une connexion ouverte et refermée entre deux relevés peut manquer.
 - **Connexions établies** affiche le nombre de connexions TCP ouvertes à chaque relevé. Une ligne plate indique que ce nombre est stable.
 
@@ -29,7 +29,7 @@ La légende indique la valeur du dernier relevé. Survolez un port dans la lége
 
 Le menu d’actions permet de terminer les processus autorisés, de bloquer le trafic entrant d’un port dans le Pare-feu Windows et de retirer un blocage. Pour un blocage temporaire, RustyPort demande la durée. La surveillance des relances peut arrêter de nouveau une application sélectionnée pendant la durée choisie ou jusqu’à la fermeture complète de RustyPort. Le bouton « Relances » permet d’annuler cette surveillance.
 
-Les relevés fonctionnent sans élévation. Les modifications du pare-feu et certains arrêts de processus demandent une autorisation d’administrateur via Windows.
+Le binaire de livraison `RustyPort.exe` demande l’autorisation administrateur Windows dès le lancement. Ces droits permettent de mesurer le débit par port et d’utiliser les actions système autorisées, notamment celles du pare-feu.
 
 ## Compiler et lancer
 
@@ -41,7 +41,7 @@ cargo build --release --locked
 .\target\release\rustyport.exe
 ```
 
-Pour créer une copie dont l’icône apparaît dans l’Explorateur Windows, exécutez ces commandes après compilation.
+Pour préparer le binaire de livraison avec l’icône et la demande d’autorisation Windows, exécutez ces commandes après compilation.
 
 ```powershell
 Copy-Item .\target\release\rustyport.exe .\RustyPort.exe
@@ -49,4 +49,4 @@ Start-Process .\target\release\rustyport.exe -ArgumentList '--embed-icon', '.\Ru
 .\RustyPort.exe
 ```
 
-La croix masque la fenêtre et laisse RustyPort surveiller les ports dans la zone de notification. Un nouveau lancement rouvre l’instance active. Pour arrêter la surveillance, choisissez « Quitter RustyPort » depuis l’icône de notification.
+La croix masque la fenêtre et laisse RustyPort surveiller les ports dans la zone de notification. Un nouveau lancement rouvre l’instance active. « Quitter RustyPort », dans le menu de l’icône de notification, ferme le processus. Si le nettoyage se bloque, RustyPort force son propre arrêt après 1,5 seconde. Si un export CSV est en cours, la fermeture démarre automatiquement à la fin de l’export.
