@@ -1,6 +1,6 @@
 # RustyPort
 
-RustyPort est un utilitaire Windows de **RustyPort**, écrit en Rust avec une interface Win32. Il affiche les ports TCP en écoute, les sockets UDP et les processus qui les utilisent.
+RustyPort est un utilitaire Windows écrit en Rust avec une interface Win32. Il affiche les ports TCP en écoute, les sockets UDP et les processus qui les utilisent.
 
 ## Surveiller les ports
 
