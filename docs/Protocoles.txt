@@ -8,7 +8,11 @@ OpenPort indique le numéro, le protocole, l’adresse locale et le processus
 qui l’utilise. Le PID identifie le processus en cours d’exécution.
 
 TCP établit une connexion et remet les données dans l’ordre. OpenPort
-affiche les ports TCP en écoute, prêts à recevoir de nouvelles connexions.
+affiche les ports TCP en écoute et le nombre de connexions établies
+associées au même PID, au même port et à l'adresse locale. Une écoute
+générique inclut ses adresses de la même famille IP. Une connexion peut
+rester établie sans échanger de données et les connexions très brèves
+peuvent passer entre deux relevés.
 Référence TCP (RFC 9293) — https://www.rfc-editor.org/rfc/rfc9293.html
 
 UDP transmet des datagrammes. Ceux-ci peuvent arriver en désordre ou se
@@ -52,11 +56,57 @@ Les actions dans OpenPort
 
 • Terminer le processus arrête le programme et toutes ses connexions.
   Windows libère les ports qu’il détenait.
-• Bloquer le trafic entrant ajoute une règle du Pare-feu Windows pour
+• Bloquer le port dans Actions du port ajoute une règle du Pare-feu Windows pour
   le numéro et le protocole choisis. Windows demande les droits
   administrateur pour cette modification.
 • Retirer le blocage supprime la règle créée par OpenPort. Si le port ne
   figure plus dans la liste, saisis son numéro dans le filtre, clique sur
   Retirer le blocage et choisis TCP ou UDP.
+• Le clic droit sur une ligne donne accès aux mêmes actions. « Terminer
+  et bloquer » arrête le processus après confirmation du blocage par Windows.
+• « Durée (min) » s'applique aux actions temporaires. Windows programme le
+  retrait de la règle de blocage, même si OpenPort quitte. Si le PC est
+  arrêté à l'échéance, le Planificateur de tâches reprend le retrait après
+  le redémarrage. Les autres règles de pare-feu continuent de s'appliquer.
+• La surveillance des relances arrête les nouvelles instances du même
+  exécutable au relevé suivant. Sélectionne une durée ou « jusqu'à Quitter ».
+  Le menu « Relances » permet de réautoriser chaque application surveillée.
 
 Règles du Pare-feu Windows — https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/rules
+
+Surveiller et trier
+
+Clique sur un en-tête pour trier, puis une seconde fois pour inverser le
+tri. La flèche indique le sens. La liste démarre avec les ports à risque
+en haut. Le menu des niveaux filtre cette liste et peut se combiner avec
+la recherche. Le menu « Relevé » règle la cadence de 250 ms à 10 s,
+avec 2 s par défaut. Les durées réelles varient selon le temps de collecte.
+
+  À risque  Port habituel d'un service sensible, lié au réseau.
+  Inconnu   Identité indisponible ou usage réseau à confirmer.
+  Normal    Bouclage avec chemin identifié, processus système reconnu
+            ou service Windows confirmé sur un port attendu.
+
+Le détail affiche la raison du niveau. Ce classement décrit des indices
+d'identité et d'exposition locale. Le pare-feu et la configuration du
+réseau déterminent quels appareils peuvent effectivement se connecter.
+
+« Vu depuis » mesure le temps depuis la première observation continue
+dans cette session. Le détail affiche aussi l'âge du processus si
+Windows le communique. Le compteur de surveillance démarre à l'ouverture.
+
+Le graphique affiche les débits reçus et envoyés sur les 60 dernières
+secondes à partir des compteurs d'octets Windows. Il additionne les
+interfaces actives hors bouclage et interfaces de filtrage. Avec un VPN,
+un paquet peut être mesuré sur plusieurs interfaces. Un débit à zéro
+correspond à un intervalle mesuré. Un intervalle indisponible laisse un
+trou dans le graphique. Les débits sont globaux. Le détail UDP indique
+que l'activité par port est indisponible.
+
+Survole une mesure sur le graphique pour lire ses débits et la durée de
+l'intervalle. La croix masque la fenêtre. Un clic sur l'icône OpenPort près
+de l'horloge rouvre la fenêtre. Son menu donne aussi accès à « Quitter ».
+
+Tables des connexions TCP Windows — https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable
+Compteurs réseau Windows — https://learn.microsoft.com/en-us/windows/win32/api/netioapi/ns-netioapi-mib_if_row2
+Ports des services Windows — https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/service-overview-and-network-port-requirements

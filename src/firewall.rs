@@ -3,53 +3,94 @@ use std::mem::size_of;
 use std::ptr::null;
 
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-use crate::ports::{Handle, Protocol, wide};
+use crate::ports::{Handle, Protocol, system_directory, wide};
 
 pub struct Job {
     process: Handle,
     pub port: u16,
     pub protocol: Protocol,
-    pub block: bool,
+    pub action: Action,
 }
 
-fn script(port: u16, protocol: Protocol, block: bool) -> String {
+#[derive(Clone, Copy)]
+pub enum Action {
+    Block,
+    Timed(u16),
+    Remove,
+}
+
+fn script(port: u16, protocol: Protocol, action: Action) -> String {
     let protocol = protocol.name();
     let name = format!("OpenPort-{protocol}-{port}");
-    let change = if block {
-        format!(
-            "if (!$rule) {{ New-NetFirewallRule -PolicyStore PersistentStore -Name '{name}' \
-             -DisplayName 'OpenPort - {protocol} {port}' -Direction Inbound -Action Block \
-             -Profile Any -Protocol {protocol} -LocalPort {port} | Out-Null }} \
-             else {{ Enable-NetFirewallRule -PolicyStore PersistentStore -Name '{name}' | Out-Null }}"
-        )
-    } else {
-        format!("if ($rule) {{ Remove-NetFirewallRule -PolicyStore PersistentStore -Name '{name}' }}")
+    let temporary = format!("OpenPort-Temp-{protocol}-{port}-");
+    let new_rule = format!(
+        "New-NetFirewallRule -PolicyStore PersistentStore -Name $name \
+         -DisplayName ('OpenPort - {protocol} {port} (' + $name + ')') -Direction Inbound -Action Block \
+         -Profile Any -Protocol {protocol} -LocalPort {port} | Out-Null"
+    );
+    let change = match action {
+        Action::Block => format!(
+            "$name = '{name}'; \
+             $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name $name -ErrorAction SilentlyContinue; \
+             if (!$rule) {{ {new_rule} }} \
+             else {{ Enable-NetFirewallRule -PolicyStore PersistentStore -Name $name | Out-Null }}"
+        ),
+        Action::Timed(minutes) => format!(
+            "Import-Module (Join-Path $PSHOME 'Modules\\ScheduledTasks\\ScheduledTasks.psd1'); \
+             $name = '{temporary}' + [Guid]::NewGuid().ToString('N'); \
+             $expiry = (Get-Date).AddMinutes({minutes}); \
+             $cleanup = ('try {{ $ErrorActionPreference = ''Stop''; \
+                 Import-Module (Join-Path $PSHOME ''Modules\\NetSecurity\\NetSecurity.psd1''); \
+                 Import-Module (Join-Path $PSHOME ''Modules\\ScheduledTasks\\ScheduledTasks.psd1''); \
+                 try {{ Remove-NetFirewallRule -PolicyStore PersistentStore -Name ''RULE_ID'' }} \
+                 catch {{ if ($_.CategoryInfo.Category -ne ''ObjectNotFound'') {{ throw }} }}; \
+                 Unregister-ScheduledTask -TaskPath ''\\'' -TaskName ''RULE_ID'' -Confirm:$false; exit 0 \
+             }} catch {{ exit 1 }}').Replace('RULE_ID', $name); \
+             $payload = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanup)); \
+             $action = New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe') \
+                 -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' + $payload); \
+             $trigger = New-ScheduledTaskTrigger -Once -At $expiry; \
+             $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries \
+                 -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); \
+             Register-ScheduledTask -TaskPath '\\' -TaskName $name -User 'S-1-5-18' \
+                 -Action $action -Trigger $trigger -Settings $settings | Out-Null; \
+             try {{ \
+                 {new_rule}; \
+                 if ((Get-Date) -ge $expiry) {{ \
+                     Remove-NetFirewallRule -PolicyStore PersistentStore -Name $name; \
+                     throw 'Le délai est déjà écoulé'; \
+                 }} \
+             }} catch {{ \
+                 try {{ Remove-NetFirewallRule -PolicyStore PersistentStore -Name $name }} \
+                 catch {{ if ($_.CategoryInfo.Category -ne 'ObjectNotFound') {{ throw }} }}; \
+                 Unregister-ScheduledTask -TaskPath '\\' -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue; throw \
+             }}"
+        ),
+        Action::Remove => format!(
+            "foreach ($name in @('{name}', '{temporary}*')) {{ \
+                 try {{ Remove-NetFirewallRule -PolicyStore PersistentStore -Name $name }} \
+                 catch {{ if ($_.CategoryInfo.Category -ne 'ObjectNotFound') {{ throw }} }} \
+             }}"
+        ),
     };
     format!(
         "try {{ $ErrorActionPreference = 'Stop'; \
          Import-Module (Join-Path $PSHOME 'Modules\\NetSecurity\\NetSecurity.psd1'); \
-         $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name '{name}' -ErrorAction SilentlyContinue; \
          {change}; exit 0 }} catch {{ exit 1 }}"
     )
 }
 
 impl Job {
-    pub fn start(window: HWND, port: u16, protocol: Protocol, block: bool) -> io::Result<Self> {
-        let mut system = [0u16; 260];
-        let length = unsafe { GetSystemDirectoryW(system.as_mut_ptr(), system.len() as u32) } as usize;
-        if length == 0 || length >= system.len() {
-            return Err(io::Error::last_os_error());
-        }
-        let directory = String::from_utf16_lossy(&system[..length]);
+    pub fn start(window: HWND, port: u16, protocol: Protocol, action: Action) -> io::Result<Self> {
+        let directory = system_directory()?;
         let program = wide(&format!("{directory}\\WindowsPowerShell\\v1.0\\powershell.exe"));
         let arguments = wide(&format!(
             "-NoLogo -NoProfile -NonInteractive -Command \"{}\"",
-            script(port, protocol, block)
+            script(port, protocol, action)
         ));
         let verb = wide("runas");
         let mut execution = SHELLEXECUTEINFOW {
@@ -69,7 +110,7 @@ impl Job {
         if execution.hProcess.is_null() {
             return Err(io::Error::other("Windows n’a pas lancé le pare-feu"));
         }
-        Ok(Self { process: Handle(execution.hProcess), port, protocol, block })
+        Ok(Self { process: Handle(execution.hProcess), port, protocol, action })
     }
 
     pub fn result(&self) -> Option<io::Result<()>> {
@@ -98,8 +139,10 @@ mod tests {
 
     #[test]
     fn firewall_commands_parse_without_changing_rules() {
-        for (protocol, block) in [(Protocol::Tcp, true), (Protocol::Udp, false)] {
-            let code = script(45678, protocol, block).replace('\'', "''");
+        for (protocol, action) in [
+            (Protocol::Tcp, Action::Block), (Protocol::Udp, Action::Remove), (Protocol::Tcp, Action::Timed(5)),
+        ] {
+            let code = script(45678, protocol, action).replace('\'', "''");
             let check = format!(
                 "$tokens = $null; $errors = $null; \
                  [System.Management.Automation.Language.Parser]::ParseInput(\

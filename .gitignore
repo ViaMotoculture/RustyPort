@@ -1,4 +1,5 @@
 /target/
+/.publication/
 /OpenPort.exe
 /.env
 /.env.*
