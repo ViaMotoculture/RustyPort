@@ -51,8 +51,8 @@
 - Le binaire a rejeté un lot d'arrêt mal formé avant d'agir et a arrêté
   deux processus de test après validation de leur identité. L'invite UAC
   réelle et l'expiration d'une règle réelle de pare-feu restent à vérifier.
-- Windows a signalé VPBA en écoute sur `127.0.0.1:8514/TCP` et une
-  requête locale a reçu HTTP 200. L'Explorateur a trouvé le groupe d'icônes
+- Windows a confirmé une écoute TCP sur le bouclage et une requête locale
+  a reçu HTTP 200. L'Explorateur a trouvé le groupe d'icônes
   dans le binaire livré. Son SHA-256 est
   `83180C58851738A363FB446DF5F8C0BAD71D26DB51B23051DDE650E39E544C6B`.
 
@@ -97,5 +97,4 @@
   pare-feu ont été testées avec des fonctions PowerShell simulées.
 - SHA-256 de l'exécutable de livraison
   `9D39D27B546673DFE2E8A4FB94719A652FB71EB38ED8B06014D4A4B56F7DD39C`.
-- Le connecteur GitHub peut publier sur `main`. Le renommage du dépôt
-  reste à effectuer dans les paramètres de GitHub.
+- Le dépôt de référence est désormais `kinowill/RustyPort`.

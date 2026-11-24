@@ -56,8 +56,8 @@
 - Appliquer les actions au groupe après confirmation de ses cibles.
   Regrouper les PID identiques et les règles de pare-feu de même port et
   protocole. Indiquer le résultat des actions qui réussissent ou échouent.
-- Démarrer les relevés à 500 ms. Le journal consigne la vérification du
-  port VPBA dans les tables Windows.
+- Démarrer les relevés à 500 ms. Le journal consigne la vérification
+  d'une écoute locale dans les tables Windows.
 - Figer l'affichage du graphique sur demande et afficher les connexions
   et processus observés au survol d'un échantillon. Conserver la mesure
   globale et la collecte en tâche de fond.
@@ -81,8 +81,6 @@
 
 ## À valider
 
-- Renommer le dépôt de référence en `kinowill/RustyPort` dans
-  les paramètres GitHub.
 - Exécuter sur un poste Windows avec droits d'administration un blocage
   temporaire sur un port de test et vérifier son expiration.
 - Vérifier l'invite UAC du nouvel arrêt sur un processus de test qui demande

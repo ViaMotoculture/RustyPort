@@ -45,9 +45,9 @@ sélection. L'inventaire associe une teinte à chaque niveau. Le volet
 
 ## État et compilation
 
-Le projet s'appelle RustyPort. La branche de référence est `main` dans
-`RustyPort/OPEN-VIA-PORT`. Le nom `kinowill/RustyPort` reste
-à appliquer dans les paramètres GitHub. L'exécutable est produit par Cargo.
+Le dépôt de référence est `kinowill/RustyPort`, branche `main`.
+Le `README.md` présente l'utilisation et la compilation de l'application.
+L'exécutable est produit par Cargo.
 
 ```powershell
 cargo test --locked
