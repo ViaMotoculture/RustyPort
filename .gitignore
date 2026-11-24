@@ -1,0 +1,8 @@
+/target/
+/.publication/
+/OpenPort.exe
+/.env
+/.env.*
+/.agents/
+/.aws/
+/.codex/
