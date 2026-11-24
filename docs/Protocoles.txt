@@ -116,6 +116,14 @@ d'identité et d'exposition locale. Le pare-feu et la configuration du
 réseau déterminent quels appareils peuvent effectivement se connecter.
 Les repères vert, ambre et rouge accompagnent les libellés dans le tableau.
 
+Le menu « Niveau » du clic droit permet de choisir « Normal », « Inconnu »
+ou « À risque ». Un astérisque signale le niveau manuel. Le détail affiche
+aussi le niveau automatique et sa raison. « Rétablir le classement
+automatique » efface le choix manuel. Plusieurs lignes sélectionnées
+peuvent être modifiées ensemble après confirmation. Les préférences sont
+locales au compte Windows et liées au port, au protocole, à l'adresse et
+au processus identifié.
+
 « Vu depuis » mesure le temps depuis la première observation continue
 dans cette session. Le détail affiche aussi l'âge du processus si
 Windows le communique. Le compteur de surveillance démarre à l'ouverture.

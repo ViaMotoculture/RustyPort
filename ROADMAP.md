@@ -78,6 +78,8 @@
   disque utilisé.
 - Revenir en tête de liste après un tri explicite en conservant la
   sélection et signaler les ports dont les courbes se superposent.
+- Choisir ou rétablir le niveau depuis le clic droit. Conserver les choix
+  du compte Windows et confirmer la modification sur plusieurs lignes.
 
 ## À valider
 

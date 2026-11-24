@@ -25,7 +25,8 @@ sélection. L'inventaire associe une teinte à chaque niveau. Le volet
   disposition et le thème. `src/ports.rs` lit les tables de ports, les
   processus et les services Windows.
 - `src/risk.rs` décrit les niveaux d'exposition. `src/table_view.rs` gère
-  l'affichage, le filtrage et le tri des lignes.
+  l'affichage, le filtrage et le tri des lignes. `src/level_preferences.rs`
+  conserve les niveaux manuels dans les préférences du compte Windows.
 - `src/monitor.rs` relève les octets des interfaces actives avec IP Helper.
   `src/chart.rs` dessine les débits des interfaces ou les connexions TCP
   des ports sélectionnés. `src/archive.rs` gère la lecture par fenêtres
@@ -74,6 +75,9 @@ Windows qui les exigent. Le projet est un utilitaire de poste de travail.
 - Le niveau et les droits d'arrêt sont évalués séparément. Les actions
   de groupe demandent une confirmation et regroupent les processus et règles
   de pare-feu identiques. Les processus protégés sont écartés de l'arrêt.
+- Le niveau manuel pilote la couleur, le filtre et le tri. Le détail garde
+  la raison du classement automatique, que l'utilisateur peut rétablir
+  depuis le menu de la ligne ou de la sélection.
 - La recherche web transmet le nom affiché de l'exécutable, le port et le
   protocole quand l'utilisateur la lance depuis le menu.
 - La lecture de l'historique charge une page à la fois. Les fichiers

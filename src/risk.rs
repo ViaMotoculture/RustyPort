@@ -3,7 +3,8 @@ use crate::ports::{Endpoint, Port, Protocol};
 pub const GUIDE: &str = "À risque · Un port habituel d’un service sensible est lié au réseau. Exemples · partage Windows, administration à distance et bases de données.\r\n\r\n\
     Inconnu · Le chemin est indisponible ou l’usage réseau du programme reste à confirmer.\r\n\r\n\
     Normal · Bouclage avec exécutable identifié, processus système reconnu ou service Windows confirmé sur un port attendu.\r\n\r\n\
-    Le niveau indique l’exposition locale et l’identification du processus. L’accès réel dépend du pare-feu et du réseau.";
+    Le niveau indique l’exposition locale et l’identification du processus. L’accès réel dépend du pare-feu et du réseau.\r\n\r\n\
+    Un astérisque signale un niveau choisi dans le menu « Niveau ». Le détail affiche aussi le classement automatique.";
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Risk {

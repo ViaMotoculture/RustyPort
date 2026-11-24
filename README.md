@@ -7,6 +7,7 @@ RustyPort est un utilitaire Windows écrit en Rust avec une interface Win32. Il 
 - La liste indique l’adresse locale, le protocole, le PID et la durée d’observation de chaque port. Le détail de la ligne affiche aussi l’âge du processus lorsqu’il est disponible.
 - La cadence se règle de 250 ms à 10 s dans le bandeau, avec 500 ms par défaut. Filtrez la liste par texte ou par niveau. Cliquez sur « TCP établies » pour trier par connexions en cours ou sur « Nouv. TCP / 60 s » pour trier par activité récente.
 - Les niveaux « Normal », « Inconnu » et « À risque » s’appuient sur l’adresse d’écoute, l’usage habituel du port et l’identification du processus. Le bouton « Critères de niveau » explique ces repères. Le pare-feu et la configuration réseau déterminent l’accessibilité effective d’un port.
+- Le menu **Niveau** du clic droit permet de choisir un niveau ou de rétablir le classement automatique. Un astérisque signale un choix manuel, conservé d’un lancement à l’autre sur le compte Windows.
 - Sélectionnez plusieurs lignes avec Ctrl+A, Ctrl+clic ou un glisser. Le menu contextuel donne accès aux détails, à la recherche web et aux actions sur la sélection. Les actions groupées demandent une confirmation.
 
 « Rechercher sur le web » ouvre Google dans le navigateur avec le nom du processus, le numéro de port et le protocole. La recherche se déclenche depuis le menu.

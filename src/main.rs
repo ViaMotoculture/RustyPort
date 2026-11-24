@@ -6,6 +6,7 @@ mod duration_dialog;
 mod elevation;
 mod firewall;
 mod icon;
+mod level_preferences;
 mod monitor;
 mod ports;
 mod risk;
@@ -38,6 +39,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::{PCWSTR, w};
 
 use firewall::Action as FirewallAction;
+use level_preferences::LevelPreferences;
 use monitor::{DEFAULT_INTERVAL_MS, INTERVALS, Monitor, Point, Reading, TrafficHistory, TrafficState};
 use ports::{Port, Protocol, wide};
 use risk::{Risk, usual_use};
@@ -59,6 +61,9 @@ const ID_SAVE_RANGE: u16 = 113;
 const ID_CLEAR_ARCHIVE: u16 = 114;
 const ID_ARCHIVE_ENABLED: u16 = 115;
 const ID_ARCHIVE_PANEL: u16 = 116;
+const MENU_LEVEL_AUTO: u32 = 12;
+const MENU_LEVEL_NORMAL: u32 = 13;
+const MENU_LEVEL_ELEVATED: u32 = 15;
 const TBM_GETPOS: u32 = WM_USER;
 const SS_ICON: u32 = 0x0003;
 const SS_CENTERIMAGE: u32 = 0x0200;
@@ -144,6 +149,7 @@ struct App {
     risk_markers: Option<icon::RiskMarkers>,
     list_error: RefCell<Option<String>>,
     last_port_read: Cell<Option<Instant>>,
+    level_preferences: RefCell<io::Result<LevelPreferences>>,
     ports: RefCell<Vec<Entry>>,
     rows: RefCell<Vec<Row>>,
     sort: Cell<Sort>,
@@ -226,6 +232,10 @@ impl App {
         let unblock = control(window, w!("BUTTON"), "Retirer le blocage", 0, ID_UNBLOCK, false)?;
         let watches = control(window, w!("BUTTON"), "Relances (0)…", 0, ID_WATCHES, false)?;
         let status = label("La croix masque RustyPort · Quitter depuis la zone de notification")?;
+        let level_preferences = LevelPreferences::load();
+        if let Err(error) = &level_preferences {
+            set_text(status, &format!("Préférences de niveau indisponibles · {error}"));
+        }
         unsafe { EnableWindow(watches, 0) };
         let started = Instant::now();
         let monitor = Monitor::start()?;
@@ -262,6 +272,7 @@ impl App {
             risk_markers: icon::RiskMarkers::new(),
             list_error: RefCell::new(Some("Relevé des ports en cours…".into())),
             last_port_read: Cell::new(None),
+            level_preferences: RefCell::new(level_preferences),
             ports: RefCell::new(Vec::new()), rows: RefCell::new(Vec::new()),
             sort: Cell::new(Sort::default()), drag: Cell::new(None),
             drawing_list: Cell::new(false),
@@ -905,11 +916,14 @@ impl App {
                 if self.list_error.borrow_mut().take().is_none() {
                     first_seen.extend(self.ports.borrow().iter().map(|entry| (entry.key(), entry.first_seen)));
                 }
+                let preferences = self.level_preferences.borrow();
                 let entries = ports.into_iter().map(|port| {
                     let key = port.key();
                     let first_seen = first_seen.get(&key).copied().unwrap_or(at);
                     let assessment = risk::assess(&port, &self.system_directory);
-                    Entry::new(port, first_seen, assessment)
+                    let mut entry = Entry::new(port, first_seen, assessment);
+                    entry.manual_level = preferences.as_ref().ok().and_then(|settings| settings.get(&entry.port));
+                    entry
                 }).collect();
                 self.ports.replace(entries);
                 self.last_port_read.set(Some(at));
@@ -957,7 +971,7 @@ impl App {
         let total = ports.len();
         let mut counts = [0; 3];
         for entry in ports.iter() {
-            counts[entry.assessment.level as usize] += 1;
+            counts[entry.level() as usize] += 1;
         }
         drop(ports);
 
@@ -1136,10 +1150,19 @@ impl App {
             Protocol::Tcp => "Connexions TCP indisponibles".into(),
             Protocol::Udp => "UDP · activité par port indisponible".into(),
         };
+        let (level, reason) = if let Some(manual) = entry.manual_level {
+            (format!("{} (manuel)", manual.label()), format!("Classement automatique · {} · {}",
+                entry.assessment.level.label(), entry.assessment.reason))
+        } else {
+            (entry.level().label().into(), entry.assessment.reason.into())
+        };
         let mut detail = format!(
             "{} · {} · {address}\r\n{}\r\n{activity}\r\n{observation} · {age}",
-            entry.assessment.level.label(), endpoint.label(), entry.assessment.reason
+            level, endpoint.label(), reason
         );
+        if !LevelPreferences::can_set(port) {
+            detail.push_str("\r\nNiveau manuel indisponible · processus non identifié.");
+        }
         if expanded {
             detail.push_str(&format!("\r\nAdresse locale · {}\r\nProcessus · {} · PID {}",
                 endpoint.address_label(), port.owner.name, endpoint.pid));
@@ -1310,7 +1333,8 @@ impl App {
         let can_watch = can_stop && !self.monitor_lost.get() && relaunch::can_watch(port, &self.system_directory);
         let can_block = one && self.firewall.borrow().is_none();
 
-        let choice = popup_menu(self.window, position, &[
+        let choices = self.level_menu(std::slice::from_ref(&entry));
+        let choice = popup_menu_with_levels(self.window, position, &[
             (10, "Plus d’infos sur ce port…", true),
             (11, "Rechercher ce port sur le web…", true),
             (0, "", true),
@@ -1323,8 +1347,11 @@ impl App {
             (7, "Terminer et surveiller les relances pendant X minutes…", can_watch),
             (8, "Retirer le blocage", can_block),
             (9, "Pourquoi une action est grisée ?", !can_stop || !can_watch || !can_block),
-        ]);
+        ], Some(choices));
         match choice {
+            MENU_LEVEL_AUTO..=MENU_LEVEL_ELEVATED => {
+                self.change_level(std::slice::from_ref(&entry), level_for_choice(choice));
+            }
             1 => self.confirm_and_stop(port),
             2 | 4 => self.change_firewall(FirewallAction::Block, Some(port.clone()), choice == 4),
             3 | 5 => {
@@ -1373,6 +1400,62 @@ impl App {
         result as isize > 32
     }
 
+    fn level_menu(&self, entries: &[Entry]) -> LevelMenu {
+        let mut candidates = entries.iter().filter(|entry| LevelPreferences::can_set(&entry.port))
+            .map(|entry| entry.manual_level);
+        let first = candidates.next();
+        let checked = first.filter(|level| candidates.all(|candidate| candidate == *level))
+            .map(|level| level.map_or(MENU_LEVEL_AUTO, |level| MENU_LEVEL_NORMAL + level as u32));
+        LevelMenu {
+            checked,
+            enabled: first.is_some() && self.list_error.borrow().is_none() && self.level_preferences.borrow().is_ok(),
+        }
+    }
+
+    fn change_level(&self, entries: &[Entry], level: Option<Risk>) {
+        if self.list_error.borrow().is_some() {
+            return;
+        }
+        let targets = entries.iter().map(|entry| &entry.port).filter(|port| LevelPreferences::can_set(port))
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return;
+        }
+        if entries.len() > 1 {
+            let action = level.map_or_else(|| "Rétablir le classement automatique".into(),
+                |level| format!("Choisir le niveau {}", level.label()));
+            let mut details = targets.iter().map(|port| format!("{} · {} · {}",
+                port.owner.name, port.endpoint.label(), port.endpoint.address_label())).collect::<Vec<_>>();
+            let skipped = entries.len() - targets.len();
+            if skipped > 0 {
+                details.push(format!("{skipped} ligne(s) écartée(s) · processus non identifié."));
+            }
+            if !duration_dialog::review(self.window, "Niveaux de la sélection", &action, &details.join("\r\n"), true) {
+                return;
+            }
+        }
+        let mut preferences = self.level_preferences.borrow_mut();
+        let settings = match preferences.as_mut() {
+            Ok(settings) => settings,
+            Err(error) => {
+                set_text(self.status, &format!("Préférences de niveau indisponibles · {error}"));
+                return;
+            }
+        };
+        if let Err(error) = settings.set(&targets, level) {
+            set_text(self.status, &format!("Enregistrement du niveau impossible · {error}"));
+            return;
+        }
+        for entry in self.ports.borrow_mut().iter_mut() {
+            entry.manual_level = settings.get(&entry.port);
+        }
+        drop(preferences);
+        self.populate();
+        let message = level.map_or_else(|| "Classement automatique rétabli.".into(),
+            |level| format!("Niveau manuel enregistré · {}.", level.label()));
+        set_text(self.status, &message);
+    }
+
     fn bulk_menu(&self, position: POINT) {
         let entries = self.selected_entries();
         let ready = self.list_error.borrow().is_none();
@@ -1380,7 +1463,7 @@ impl App {
         let can_watch = can_stop && !self.monitor_lost.get()
             && entries.iter().any(|entry| relaunch::can_watch(&entry.port, &self.system_directory));
         let can_block = ready && self.firewall.borrow().is_none();
-        let choice = popup_menu(self.window, position, &[
+        let choice = popup_menu_with_levels(self.window, position, &[
             (10, "Plus d’infos sur la sélection…", true),
             (11, "Rechercher la sélection sur le web…", true),
             (0, "", true),
@@ -1392,12 +1475,16 @@ impl App {
             (6, "Terminer et surveiller les relances jusqu’à Quitter…", can_watch),
             (7, "Terminer et surveiller les relances pendant X minutes…", can_watch),
             (8, "Retirer les blocages…", can_block),
-        ]);
+        ], Some(self.level_menu(&entries)));
         self.run_bulk(entries, choice);
     }
 
     fn run_bulk(&self, entries: Vec<Entry>, choice: u32) {
         if choice == 0 || entries.is_empty() {
+            return;
+        }
+        if (MENU_LEVEL_AUTO..=MENU_LEVEL_ELEVATED).contains(&choice) {
+            self.change_level(&entries, level_for_choice(choice));
             return;
         }
         if choice == 10 {
@@ -1727,11 +1814,42 @@ fn under(control: HWND) -> POINT {
 }
 
 fn popup_menu(window: HWND, at: POINT, items: &[(usize, &str, bool)]) -> u32 {
+    popup_menu_with_levels(window, at, items, None)
+}
+
+struct LevelMenu {
+    checked: Option<u32>,
+    enabled: bool,
+}
+
+fn level_for_choice(choice: u32) -> Option<Risk> {
+    let index = choice.checked_sub(MENU_LEVEL_NORMAL)?;
+    Risk::LEVELS.get(index as usize).copied()
+}
+
+fn popup_menu_with_levels(window: HWND, at: POINT, items: &[(usize, &str, bool)], levels: Option<LevelMenu>) -> u32 {
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {
         return 0;
     }
     unsafe {
+        if let Some(levels) = levels {
+            let submenu = CreatePopupMenu();
+            if !submenu.is_null() {
+                for (index, level) in Risk::LEVELS.into_iter().enumerate() {
+                    let id = MENU_LEVEL_NORMAL + index as u32;
+                    let flags = MF_STRING | if levels.checked == Some(id) { MF_CHECKED } else { MF_UNCHECKED };
+                    AppendMenuW(submenu, flags, id as usize, wide(level.label()).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, null());
+                let flags = MF_STRING | if levels.checked == Some(MENU_LEVEL_AUTO) { MF_CHECKED } else { MF_UNCHECKED };
+                AppendMenuW(submenu, flags, MENU_LEVEL_AUTO as usize, w!("Rétablir le classement automatique"));
+                let flags = MF_POPUP | if levels.enabled { MF_ENABLED } else { MF_GRAYED };
+                if AppendMenuW(menu, flags, submenu as usize, w!("Niveau")) == 0 {
+                    DestroyMenu(submenu);
+                }
+            }
+        }
         for &(id, label, enabled) in items {
             if id == 0 {
                 AppendMenuW(menu, MF_SEPARATOR, 0, null());
@@ -2071,6 +2189,7 @@ mod tests {
 
         let window = create_window().unwrap();
         let app = Box::new(App::new(window).unwrap());
+        *app.level_preferences.borrow_mut() = Ok(LevelPreferences::in_memory());
         assert!(app._small_icon.custom && app._large_icon.custom);
         unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, &*app as *const App as isize) };
         app.bind_table_input().unwrap();
@@ -2125,6 +2244,19 @@ mod tests {
         assert_eq!(item.iImage, Risk::Normal as i32);
         let selection = LVITEMW { state: LVIS_SELECTED, stateMask: LVIS_SELECTED, ..Default::default() };
         unsafe { SendMessageW(app.list, LVM_SETITEMSTATE, row_a, &selection as *const _ as isize) };
+
+        let target = [app.selected().unwrap()];
+        assert_eq!(app.level_menu(&target).checked, Some(MENU_LEVEL_AUTO));
+        app.change_level(&target, Some(Risk::Elevated));
+        let selected = app.selected().unwrap();
+        assert_eq!(selected.assessment.level, Risk::Normal);
+        assert_eq!(selected.level(), Risk::Elevated);
+        assert_eq!(app.rows.borrow()[index_of(a.port())].fields[0], "À risque *");
+        assert!(window_text(app.details).contains("Classement automatique · Normal"));
+        assert_eq!(app.level_menu(&[selected]).checked, Some(MENU_LEVEL_ELEVATED));
+        app.change_level(&target, None);
+        assert_eq!(app.rows.borrow()[index_of(a.port())].fields[0], "Normal");
+        assert!(app.selected().unwrap().manual_level.is_none());
 
         let click = NMLISTVIEW {
             hdr: NMHDR { hwndFrom: app.list, code: LVN_COLUMNCLICK, ..Default::default() },

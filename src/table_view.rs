@@ -11,6 +11,7 @@ pub struct Entry {
     pub port: Port,
     pub first_seen: Instant,
     pub assessment: Assessment,
+    pub manual_level: Option<Risk>,
     name: String,
     lookup: String,
 }
@@ -20,15 +21,19 @@ impl Entry {
         let endpoint = port.endpoint;
         let name = port.owner.name.to_lowercase();
         let lookup = format!(
-            "{} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {}",
             endpoint.label(), endpoint.address_label(), endpoint.pid, name, port.owner.path,
-            port.owner.services.join(" "), assessment.level.label(), usual_use(endpoint).unwrap_or_default()
+            port.owner.services.join(" "), usual_use(endpoint).unwrap_or_default()
         ).to_lowercase();
-        Self { port, first_seen, assessment, name, lookup }
+        Self { port, first_seen, assessment, manual_level: None, name, lookup }
     }
 
     pub fn key(&self) -> PortKey {
         self.port.key()
+    }
+
+    pub fn level(&self) -> Risk {
+        self.manual_level.unwrap_or(self.assessment.level)
     }
 
     fn tcp_connections(&self) -> Option<usize> {
@@ -87,7 +92,7 @@ impl Sort {
         let a_socket = a.port.endpoint;
         let b_socket = b.port.endpoint;
         let order = match self.column {
-            Column::Risk => a.assessment.level.cmp(&b.assessment.level),
+            Column::Risk => a.level().cmp(&b.level()),
             Column::Port => a_socket.port.cmp(&b_socket.port),
             Column::Protocol => a_socket.protocol.cmp(&b_socket.protocol),
             Column::Address => a_socket.address.cmp(&b_socket.address),
@@ -118,19 +123,26 @@ pub struct Row {
 }
 
 pub fn visible_rows(ports: &[Entry], query: &str, filter: Option<Risk>, sort: Sort, at: Instant) -> Vec<Row> {
+    let level_labels = Risk::LEVELS.map(|level| level.label().to_lowercase());
     let mut visible: Vec<_> = ports.iter().enumerate().filter(|(_, port)| {
-        filter.is_none_or(|level| level == port.assessment.level)
-            && query.split_whitespace().all(|part| port.lookup.contains(part))
+        let level = port.level();
+        filter.is_none_or(|filter| filter == level)
+            && query.split_whitespace().all(|part| port.lookup.contains(part) || level_labels[level as usize].contains(part))
     }).collect();
     visible.sort_unstable_by(|(_, a), (_, b)| sort.compare(a, b));
     visible.into_iter().map(|(index, entry)| {
         let port = &entry.port;
         let endpoint = port.endpoint;
-        let level = entry.assessment.level;
+        let level = entry.level();
+        let label = if entry.manual_level.is_some() {
+            format!("{} *", level.label())
+        } else {
+            level.label().into()
+        };
         Row {
             key: entry.key(), index, level,
             fields: [
-                level.label().into(),
+                label,
                 endpoint.port.to_string(),
                 endpoint.protocol.name().into(),
                 endpoint.address_label(),

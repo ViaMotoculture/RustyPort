@@ -98,3 +98,16 @@
 - SHA-256 de l'exécutable de livraison
   `9D39D27B546673DFE2E8A4FB94719A652FB71EB38ED8B06014D4A4B56F7DD39C`.
 - Le dépôt de référence est désormais `kinowill/RustyPort`.
+
+## 2026-11-24 - Niveaux manuels
+
+- Les 18 tests, `cargo check --all-targets --locked` et
+  `cargo build --release --locked` ont réussi sous Windows.
+- Une instance hors écran a vérifié les quatre choix du menu, l'indicateur
+  manuel, la couleur, le filtre et le retour au classement automatique.
+- Avec un profil de test isolé, le choix manuel a été relu après un
+  changement de PID. Une autre relance a confirmé le retour à l'automatique.
+- Le test de stockage a vérifié la relecture des choix et la conservation
+  du niveau précédent quand Windows refuse le remplacement du fichier.
+- Windows a trouvé le groupe d'icônes dans `RustyPort.exe`.
+  SHA-256 `89C25545F0E02689EE4BF3744173B86A0357684E33596313D5DF23DAE769D563`.
