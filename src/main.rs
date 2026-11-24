@@ -31,7 +31,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus,
+    EnableWindow, GetCapture, GetKeyState, IsWindowEnabled, ReleaseCapture, SetCapture, SetFocus,
     TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_A, VK_CONTROL,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass, ShellExecuteW};
@@ -297,6 +297,7 @@ impl App {
         let list_top = toolbar + 33;
         let action_top = layout.details.top + 8;
         let detail_top = action_top + 33;
+        let layout_flags = SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREDRAW | SWP_NOCOPYBITS;
         let controls = [
             (self.brand_icon, left, layout.header.top + 14, 16, 16),
             (self.brand, left + 26, layout.header.top + 8, 182, 28),
@@ -325,7 +326,7 @@ impl App {
             (self.status, left, layout.status.top + 1, content, layout.status.bottom - layout.status.top - 2),
         ];
         for (control, x, y, w, h) in controls {
-            unsafe { MoveWindow(control, x, y, w.max(1), h.max(1), 1) };
+            unsafe { SetWindowPos(control, null_mut(), x, y, w.max(1), h.max(1), layout_flags) };
         }
         let archive = layout.archive.unwrap_or_default();
         for (control, x, y, w, h) in [
@@ -338,7 +339,7 @@ impl App {
         ] {
             unsafe {
                 if layout.archive.is_some() {
-                    MoveWindow(control, x, y, w.max(1), h, 1);
+                    SetWindowPos(control, null_mut(), x, y, w.max(1), h, layout_flags);
                     ShowWindow(control, SW_SHOWNA);
                 } else {
                     ShowWindow(control, SW_HIDE);
@@ -352,7 +353,7 @@ impl App {
             let process_width = (content - fixed_width - scrollbar - 6).max(90);
             unsafe { SendMessageW(self.list, LVM_SETCOLUMNWIDTH, 4, process_width as isize) };
         }
-        unsafe { InvalidateRect(self.window, null(), 0) };
+        unsafe { RedrawWindow(self.window, null(), null_mut(), ui::REDRAW_SURFACE) };
     }
 
     fn geometry(&self) -> ui::Layout {
@@ -387,7 +388,12 @@ impl App {
         };
         unsafe {
             SetTextColor(dc, ink);
-            SetBkMode(dc, TRANSPARENT as i32);
+            if control == self.details {
+                SetBkColor(dc, theme.panel_color);
+                SetBkMode(dc, OPAQUE as i32);
+            } else {
+                SetBkMode(dc, TRANSPARENT as i32);
+            }
         }
         brush as LRESULT
     }
@@ -606,19 +612,27 @@ impl App {
             };
             Some(label)
         });
-        let live = self.live_traffic.borrow();
-        let idle = if paused.is_some() {
-            format!("Vue figée · {} · Collecte en cours",
-                if series.is_some() { "Connexions TCP" } else { "Débits des interfaces" })
-        } else if let Some(series) = series.as_ref() {
-            format!("Connexions TCP établies · {} port(s) sélectionné(s)", series.len())
-        } else {
-            live.clone()
-        };
+        let label = hovered.unwrap_or_else(|| {
+            if let Some(series) = series.as_ref() {
+                let stats = chart::selection_stats(points, series);
+                let mut label = format!("{} port(s) TCP · {} avec connexions · {} à zéro", series.len(), stats.active, stats.zero);
+                if stats.no_data > 0 {
+                    let _ = write!(label, " · {} sans relevé", stats.no_data);
+                }
+                if paused.is_some() {
+                    label.push_str(" · Vue figée");
+                }
+                label
+            } else if paused.is_some() {
+                "Vue figée · Débits des interfaces · Collecte en cours".into()
+            } else {
+                self.live_traffic.borrow().clone()
+            }
+        });
         if detail.is_empty() && self.archive_error.get() {
             detail = "Archivage sur disque indisponible pour les nouveaux relevés.".into();
         }
-        set_text(self.traffic_status, hovered.as_deref().unwrap_or(&idle));
+        set_text(self.traffic_status, &label);
         set_text(self.graph_detail, &detail);
     }
 
@@ -654,9 +668,11 @@ impl App {
             series.sort_unstable_by(|a, b| a.key.cmp(&b.key));
             series
         });
-        self.graph_series.replace(series);
-        self.update_traffic_label();
-        self.invalidate_chart();
+        if *self.graph_series.borrow() != series {
+            self.graph_series.replace(series);
+            self.update_traffic_label();
+            self.invalidate_chart();
+        }
     }
 
     fn update_timeline(&self) {
@@ -909,7 +925,9 @@ impl App {
             ),
         };
         self.set_live_traffic(message);
-        self.invalidate_chart();
+        if self.paused.borrow().is_none() {
+            self.invalidate_chart();
+        }
         match ports {
             Ok(ports) => {
                 let mut first_seen = BTreeMap::new();
@@ -994,7 +1012,6 @@ impl App {
             anchor = old.get(selection_mark as usize).map(|row| row.key);
         }
         self.drawing_list.set(true);
-        unsafe { SendMessageW(self.list, WM_SETREDRAW, 0, 0) };
         let top = if !preserve_viewport {
             Some(0)
         } else if rebuild {
@@ -1005,7 +1022,10 @@ impl App {
             None
         };
         if rebuild {
-            unsafe { SendMessageW(self.list, LVM_DELETEALLITEMS, 0, 0) };
+            unsafe {
+                SendMessageW(self.list, WM_SETREDRAW, 0, 0);
+                SendMessageW(self.list, LVM_DELETEALLITEMS, 0, 0);
+            }
         }
         for (index, row) in rows.iter().enumerate() {
             for (column, value) in row.fields.iter().enumerate() {
@@ -1038,6 +1058,13 @@ impl App {
                 }
             }
         }
+        let shown = rows.len();
+        drop(old);
+        self.rows.replace(rows);
+        self.drawing_list.set(false);
+        if rebuild {
+            unsafe { SendMessageW(self.list, WM_SETREDRAW, 1, 0) };
+        }
         if let Some(top) = top {
             let current = unsafe { SendMessageW(self.list, LVM_GETTOPINDEX, 0, 0) } as i32;
             let delta = top as i32 - current;
@@ -1049,13 +1076,8 @@ impl App {
                 }
             }
         }
-        let shown = rows.len();
-        drop(old);
-        self.rows.replace(rows);
-        self.drawing_list.set(false);
-        unsafe {
-            SendMessageW(self.list, WM_SETREDRAW, 1, 0);
-            InvalidateRect(self.list, null(), 1);
+        if rebuild {
+            unsafe { RedrawWindow(self.list, null(), null_mut(), ui::REDRAW_SURFACE) };
         }
 
         let overview = self.list_error.borrow().clone().unwrap_or_else(|| format!(
@@ -1092,13 +1114,20 @@ impl App {
         } else {
             selected.as_ref().is_some_and(|entry| entry.port.can_stop())
         };
-        unsafe {
-            EnableWindow(self.stop, i32::from(has_selection && can_request_stop && has_stoppable));
-            EnableWindow(self.block, i32::from(count > 0));
-            EnableWindow(self.unblock, i32::from(available && (has_selection || (count == 0 && self.typed_port().is_some()))));
+        for (button, enabled) in [
+            (self.stop, has_selection && can_request_stop && has_stoppable),
+            (self.block, count > 0),
+            (self.unblock, available && (has_selection || (count == 0 && self.typed_port().is_some()))),
+        ] {
+            let enabled = i32::from(enabled);
+            unsafe {
+                if IsWindowEnabled(button) != enabled {
+                    EnableWindow(button, enabled);
+                }
+            }
         }
         if count > 1 {
-            set_text(self.details, &format!(
+            self.set_details(&format!(
                 "{count} lignes sélectionnées. Le clic droit donne accès aux actions du groupe."
             ));
             return;
@@ -1109,12 +1138,15 @@ impl App {
             } else {
                 "Sélectionne un port pour voir son niveau, son processus et son activité."
             };
-            set_text(self.details, prompt);
+            self.set_details(prompt);
             return;
         };
-        let detail = self.detail_text(&entry, false);
-        if window_text(self.details) != detail {
-            set_text(self.details, &detail);
+        self.set_details(&self.detail_text(&entry, false));
+    }
+
+    fn set_details(&self, text: &str) {
+        if write_changed_text(self.details, text) {
+            unsafe { RedrawWindow(self.details, null(), null_mut(), RDW_INVALIDATE | RDW_ERASE) };
         }
     }
 
@@ -1451,6 +1483,7 @@ impl App {
         }
         drop(preferences);
         self.populate();
+        unsafe { RedrawWindow(self.window, null(), null_mut(), ui::REDRAW_SURFACE) };
         let message = level.map_or_else(|| "Classement automatique rétabli.".into(),
             |level| format!("Niveau manuel enregistré · {}.", level.label()));
         set_text(self.status, &message);
@@ -1769,7 +1802,7 @@ fn control(window: HWND, class: PCWSTR, text: &str, style: u32, id: u16, edge: b
             if edge { WS_EX_CLIENTEDGE } else { 0 },
             class,
             wide(text).as_ptr(),
-            WS_VISIBLE | WS_CHILD | style | if id != 0 || edge { WS_TABSTOP } else { 0 },
+            WS_VISIBLE | WS_CHILD | WS_CLIPSIBLINGS | style | if id != 0 || edge { WS_TABSTOP } else { 0 },
             0, 0, 0, 0, window, usize::from(id) as HMENU, GetModuleHandleW(null()), null(),
         )
     };
@@ -1781,7 +1814,11 @@ fn control(window: HWND, class: PCWSTR, text: &str, style: u32, id: u16, edge: b
 }
 
 fn set_text(control: HWND, text: &str) {
-    unsafe { SetWindowTextW(control, wide(text).as_ptr()) };
+    write_changed_text(control, text);
+}
+
+fn write_changed_text(control: HWND, text: &str) -> bool {
+    window_text(control) != text && unsafe { SetWindowTextW(control, wide(text).as_ptr()) } != 0
 }
 
 fn window_text(control: HWND) -> String {
@@ -2033,10 +2070,11 @@ unsafe extern "system" fn handle_message(window: HWND, message: u32, wparam: WPA
                 app.update_traffic_label();
                 app.invalidate_chart();
             }
+            WM_ERASEBKGND => return 1,
             WM_PAINT => {
                 let mut paint = PAINTSTRUCT::default();
                 let dc = unsafe { BeginPaint(window, &mut paint) };
-                app.paint_surface(dc);
+                ui::paint_buffered(dc, paint.rcPaint, |buffer| app.paint_surface(buffer));
                 unsafe { EndPaint(window, &paint) };
                 return 0;
             }

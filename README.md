@@ -16,6 +16,8 @@ RustyPort est un utilitaire Windows écrit en Rust avec une interface Win32. Il 
 
 Le graphique global cumule les débits reçus et envoyés sur les interfaces réseau actives hors bouclage. Le survol affiche les débits du relevé ainsi que les connexions observées sur un port TCP au même moment, lorsqu’elles existent. Avec « Ports TCP sélectionnés », chaque courbe indique le nombre de connexions TCP établies pour un port. Le tableau indique aussi les sockets UDP présentes. Les compteurs d’activité par port portent sur les connexions TCP.
 
+La légende affiche en premier les ports qui ont eu des connexions sur la période affichée. Les ports restés à zéro partagent un tracé et les ports sans relevé sont comptés séparément.
+
 « Pause » fige le graphique pendant que les relevés continuent. L’archivage local est désactivé au démarrage. Le volet « Historique » permet de l’activer, de parcourir les relevés archivés, de voir l’espace utilisé et de nettoyer la session. Vous pouvez exporter les relevés archivés en CSV pour toute la session ou pour une période choisie. Les fichiers temporaires sont supprimés lorsque RustyPort quitte. Les CSV restent à l’emplacement choisi.
 
 ## Agir sur un port ou un processus

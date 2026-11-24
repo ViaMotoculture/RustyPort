@@ -111,3 +111,28 @@
   du niveau précédent quand Windows refuse le remplacement du fichier.
 - Windows a trouvé le groupe d'icônes dans `RustyPort.exe`.
   SHA-256 `89C25545F0E02689EE4BF3744173B86A0357684E33596313D5DF23DAE769D563`.
+
+## 2026-11-24 - Redessin et sélection dense
+
+- Les 18 tests passent en compilation de développement et en version
+  optimisée. `cargo check --all-targets --locked` et la compilation de
+  livraison ont réussi.
+- À 500 ms avec 113 lignes sélectionnées, sur 1,8 s, les réécritures du
+  détail passent de 4 à 0 et les basculements de redessin de la liste de
+  8 à 0. Après 40 redimensionnements entre 900 × 630 et 1894 × 878, le
+  nombre d'objets GDI reste à 39. La superposition signalée n'a pas été
+  reproduite dans la fenêtre hors écran de référence.
+- Ctrl+A affiche 111 ports TCP, dont 6 avec connexions et 105 à zéro.
+  Le filtre des ports inactifs affiche le message d'absence de connexion.
+  Le graphique figé ne reçoit aucun redessin en 1,8 s de collecte.
+- Le test de charge a ouvert puis fermé 12 192 connexions TCP et reçu
+  8 128 datagrammes UDP sur le bouclage en environ 70 secondes.
+  L'historique à 250 ms a enregistré 256 relevés. L'export borné et
+  l'échec d'export sans fichier partiel ont été vérifiés.
+- Le binaire de livraison a rejeté un lot d'arrêt invalide et une
+  identité périmée. Un lot valide a arrêté les deux processus de test.
+- Le second lancement a retrouvé la première fenêtre. Après l'arrêt
+  forcé d'une instance de test isolée, les deux fichiers temporaires
+  ont disparu. Les relevés ont repris à la relance avec archivage désactivé.
+- Windows a trouvé le groupe d'icônes dans `RustyPort.exe`.
+  SHA-256 `3DDAFC1F4EBDFF2D8029BF7E99F01CAA755A443BDAA214011D4BBDC9563F08F1`.

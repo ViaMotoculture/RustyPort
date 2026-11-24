@@ -38,9 +38,35 @@ pub fn rate_label(rate: f64) -> String {
     format!("{:.1} {unit}", rate / factor).replace('.', ",")
 }
 
+#[derive(PartialEq, Eq)]
 pub struct Series {
     pub key: String,
     pub label: String,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct SelectionStats {
+    pub active: usize,
+    pub zero: usize,
+    pub no_data: usize,
+}
+
+pub fn selection_stats(points: &VecDeque<Point>, selection: &[Series]) -> SelectionStats {
+    let mut stats = SelectionStats::default();
+    for (_, peak) in selected_peaks(points, selection) {
+        stats.observe(peak);
+    }
+    stats
+}
+
+impl SelectionStats {
+    fn observe(&mut self, peak: Option<u32>) {
+        match peak {
+            Some(0) => self.zero += 1,
+            Some(_) => self.active += 1,
+            None => self.no_data += 1,
+        }
+    }
 }
 
 pub fn plot(bounds: RECT, selection: bool) -> RECT {
@@ -71,9 +97,18 @@ fn series_value(point: &Point, series: &Series) -> Option<f64> {
     point.socket(&series.key).map(|socket| f64::from(socket.established))
 }
 
+fn selected_peaks<'a>(points: &'a VecDeque<Point>, selection: &'a [Series])
+    -> impl Iterator<Item = (&'a Series, Option<u32>)> + 'a
+{
+    selection.iter().map(move |series| {
+        let peak = points.iter().filter_map(|point| point.socket(&series.key))
+            .map(|socket| socket.established).max();
+        (series, peak)
+    })
+}
+
 fn selection_scale(points: &VecDeque<Point>, selection: &[Series]) -> f64 {
-    selection.iter().flat_map(|series| points.iter().filter_map(move |point| series_value(point, series)))
-        .fold(1.0, f64::max)
+    f64::from(selected_peaks(points, selection).filter_map(|(_, peak)| peak).max().unwrap_or(0).max(1))
 }
 
 pub fn hovered_sockets<'a>(
@@ -116,8 +151,9 @@ pub fn paint(
     } else {
         (rgb(19, 38, 44), rgb(47, 75, 82), rgb(203, 225, 229), RECEIVED_COLOR, SENT_COLOR)
     };
-    let scale = if let Some(selection) = selection {
-        selection_scale(points, selection)
+    let selected = selection.map(|series| selected_peaks(points, series).collect::<Vec<_>>());
+    let scale = if let Some(selected) = &selected {
+        f64::from(selected.iter().filter_map(|(_, peak)| *peak).max().unwrap_or(0).max(1))
     } else {
         points.iter().filter_map(|point| point.rates)
             .map(|rate| rate.received.max(rate.sent)).fold(1.0, f64::max)
@@ -169,25 +205,70 @@ pub fn paint(
             MoveToEx(dc, x, plot.top, std::ptr::null_mut());
             LineTo(dc, x, plot.bottom + 1);
         }
-        if let Some(selection) = selection {
-            if selection.is_empty() {
-                SetTextColor(dc, text);
-                paint_text(dc, plot.left + 12, plot.top + 16, "Sélectionnez un ou plusieurs ports TCP dans la liste.");
+        if let Some(selected) = selected.as_deref() {
+            let mut stats = SelectionStats::default();
+            for &(_, peak) in selected {
+                stats.observe(peak);
             }
+            let note = if selected.is_empty() {
+                Some("Sélectionnez un ou plusieurs ports TCP dans la liste.")
+            } else if stats.zero == 0 && stats.active == 0 {
+                Some("Aucun relevé disponible pour ces ports sur cette période.")
+            } else if stats.active == 0 {
+                Some("Aucune connexion TCP observée sur cette période.")
+            } else {
+                None
+            };
+            if let Some(note) = note {
+                SetTextColor(dc, text);
+                paint_text(dc, plot.left + 12, plot.top + 16, note);
+            }
+
+            // The shared baseline breaks wherever no zero-only port was measured.
+            let zero_color = if high_contrast { text } else { rgb(139, 166, 170) };
+            if stats.zero > 0 {
+                let zero_series = selected.iter().filter(|(_, peak)| *peak == Some(0))
+                    .map(|(series, _)| *series).collect::<Vec<_>>();
+                let zero_value = |point: &Point| {
+                    zero_series.iter().any(|series| point.socket(&series.key).is_some()).then_some(0.0)
+                };
+                draw_series(dc, plot, points, scale, zero_color, zero_value);
+                draw_marker(dc, plot, hovered, scale, zero_color, zero_value);
+            }
+
             let available = ((bounds.bottom - bounds.top - 20) / 18).max(1) as usize;
-            let listed = if selection.len() > available { available.saturating_sub(1) } else { available };
-            for (index, series) in selection.iter().enumerate() {
+            let has_summary = stats.zero + stats.no_data > 0;
+            let active_slots = available.saturating_sub(usize::from(has_summary));
+            let overflow = stats.active > active_slots && active_slots > 1;
+            let listed = stats.active.min(active_slots - usize::from(overflow));
+            let legend_start = plot.top - 6;
+            let active = selected.iter().filter(|(_, peak)| peak.is_some_and(|peak| peak > 0));
+            for (index, (series, _)) in active.enumerate() {
                 let color = if high_contrast { text } else { series_color(index) };
                 draw_series(dc, plot, points, scale, color, |point| series_value(point, series));
                 draw_marker(dc, plot, hovered, scale, color, |point| series_value(point, series));
                 if index < listed {
-                    paint_legend(dc, bounds, plot.right, plot.top - 6 + index as i32 * 18, color, &series.label);
+                    paint_legend(dc, bounds, plot.right, legend_start + index as i32 * 18, color, &series.label);
                 }
             }
-            if selection.len() > listed {
+            if overflow {
                 SetTextColor(dc, text);
-                paint_text(dc, plot.right + 19, plot.top - 6 + listed as i32 * 18,
-                    &format!("+ {} courbes", selection.len() - listed));
+                paint_text(dc, plot.right + 19, legend_start + listed as i32 * 18,
+                    &format!("+ {} courbe(s) active(s)", stats.active - listed));
+            }
+            if has_summary {
+                let y = legend_start + (listed + usize::from(overflow)) as i32 * 18;
+                match (stats.zero, stats.no_data) {
+                    (0, missing) => {
+                        SetTextColor(dc, text);
+                        paint_text(dc, plot.right + 19, y, &format!("{missing} sans relevé"));
+                    }
+                    (zero, missing) => {
+                        let label = if missing == 0 { format!("{zero} à zéro") }
+                            else { format!("{zero} à zéro · {missing} sans relevé") };
+                        paint_legend(dc, bounds, plot.right, y, zero_color, &label);
+                    }
+                }
             }
         } else {
             for (is_received, label, color, offset) in [(true, "Reçu", received, -6), (false, "Envoyé", sent, 15)] {
@@ -290,5 +371,11 @@ mod tests {
             .into_iter().map(|socket| socket.endpoint.as_str()).collect::<Vec<_>>();
         assert_eq!(ports(plot.bottom), ["8514/TCP", "443/TCP"]);
         assert_eq!(ports(plot.top), ["9000/TCP"]);
+
+        let mut selection = selection;
+        selection.push(Series { key: "missing".into(), label: "Sans relevé".into() });
+        assert_eq!(selection_stats(&points, &selection), SelectionStats { active: 1, zero: 2, no_data: 1 });
+        assert_eq!(selection_stats(&VecDeque::new(), &selection), SelectionStats { active: 0, zero: 0, no_data: 4 });
+        assert_eq!(series_value(point, selection.last().unwrap()), None);
     }
 }

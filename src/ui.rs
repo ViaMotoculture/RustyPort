@@ -10,6 +10,7 @@ use crate::risk::Risk;
 
 const MARGIN: i32 = 12;
 pub const INSET: i32 = 10;
+pub const REDRAW_SURFACE: REDRAW_WINDOW_FLAGS = RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN;
 
 pub struct Layout {
     pub client: RECT,
@@ -59,6 +60,7 @@ pub struct Theme {
     pub body_ink: COLORREF,
     pub header_ink: COLORREF,
     pub status_ink: COLORREF,
+    pub panel_color: COLORREF,
 }
 
 impl Theme {
@@ -84,7 +86,7 @@ impl Theme {
                 body: font(13, FW_NORMAL),
                 heading: font(14, FW_BOLD),
                 display: font(19, FW_BOLD),
-                body_ink, header_ink, status_ink,
+                body_ink, header_ink, status_ink, panel_color: panel,
             }
         }
     }
@@ -166,6 +168,39 @@ impl Drop for Theme {
                 unsafe { DeleteObject(resource) };
             }
         }
+    }
+}
+
+pub fn paint_buffered(dc: HDC, area: RECT, paint: impl Fn(HDC)) {
+    let width = area.right - area.left;
+    let height = area.bottom - area.top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let copied = unsafe {
+        let buffer = CreateCompatibleDC(dc);
+        if buffer.is_null() {
+            paint(dc);
+            return;
+        }
+        let bitmap = CreateCompatibleBitmap(dc, width, height);
+        let previous = if bitmap.is_null() { null_mut() } else { SelectObject(buffer, bitmap) };
+        let mut copied = false;
+        if !previous.is_null() {
+            if SetViewportOrgEx(buffer, -area.left, -area.top, null_mut()) != 0 {
+                paint(buffer);
+                copied = BitBlt(dc, area.left, area.top, width, height, buffer, area.left, area.top, SRCCOPY) != 0;
+            }
+            SelectObject(buffer, previous);
+        }
+        if !bitmap.is_null() {
+            DeleteObject(bitmap);
+        }
+        DeleteDC(buffer);
+        copied
+    };
+    if !copied {
+        paint(dc);
     }
 }
 

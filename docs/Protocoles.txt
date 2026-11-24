@@ -143,6 +143,10 @@ La légende indique la couleur de chaque courbe, qui mesure le nombre de
 connexions établies. Le graphique des interfaces mesure les octets reçus
 et envoyés à l'échelle des interfaces.
 
+Les ports qui ont eu une connexion sur la période affichée apparaissent
+en premier dans la légende. Les ports mesurés à zéro partagent un tracé
+et ceux sans relevé sont comptés séparément.
+
 Si des courbes se superposent au survol, RustyPort indique les autres ports
 sur la même position. Dans la vue des débits, la ligne « TCP au même
 relevé » signale une connexion observée au moment de la mesure. Le débit

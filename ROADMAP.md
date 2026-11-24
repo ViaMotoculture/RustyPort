@@ -80,6 +80,10 @@
   sélection et signaler les ports dont les courbes se superposent.
 - Choisir ou rétablir le niveau depuis le clic droit. Conserver les choix
   du compte Windows et confirmer la modification sur plusieurs lignes.
+- Afficher les ports actifs en premier dans la légende et regrouper
+  ceux restés à zéro lors d'une sélection de plusieurs ports.
+- Effacer le fond du détail à son redessin et limiter les redessins
+  de la liste et du graphique lors des relevés.
 
 ## À valider
 
