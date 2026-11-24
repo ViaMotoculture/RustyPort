@@ -135,9 +135,11 @@ un paquet peut être mesuré sur plusieurs interfaces. Un débit à zéro
 correspond à un intervalle mesuré. Un intervalle indisponible laisse un
 trou dans le graphique.
 
-Survole le graphique pour lire la valeur du relevé, le nom du processus,
-le port et un correspondant quand il est disponible.
-« Ports sélectionnés » donne le choix entre le débit et deux mesures TCP.
+Survole une ligne de la légende pour lire le détail du dernier relevé.
+Survole le tracé pour consulter un instant plus ancien. Le détail affiche
+la mesure, le processus, le port et un correspondant quand il est disponible.
+« Ports sélectionnés » ouvre « Connexions établies » par défaut. Le menu
+voisin donne le choix entre le débit et les deux mesures TCP.
 « Débit par port » trace une courbe par port TCP ou UDP, en octets par
 seconde. Elle additionne les octets reçus et envoyés rapportés par la
 trace réseau Windows. Le survol sépare les deux valeurs. La mesure se
@@ -148,10 +150,12 @@ sous forme de pics. « Connexions établies » indique combien de connexions
 étaient ouvertes au relevé. Une ligne plate indique que ce nombre reste
 stable. Le débit des interfaces est exprimé en octets par seconde.
 
-Les ports dont la mesure est non nulle sur la période affichée apparaissent
-en premier dans la légende. Les ports mesurés à zéro partagent un tracé
-et ceux sans relevé sont comptés séparément. Une nouvelle connexion
-ouverte et refermée entre deux relevés peut manquer.
+La légende affiche la valeur du dernier relevé à côté du port. Dans une
+sélection dense, les ports dont la mesure est non nulle apparaissent
+en premier. Les ports mesurés à zéro partagent un tracé et ceux sans
+relevé sont comptés séparément. Chaque port garde sa couleur quand
+d'autres courbes apparaissent. Une nouvelle connexion ouverte et
+refermée entre deux relevés peut manquer.
 
 Si des courbes se superposent au survol, RustyPort indique les autres ports
 sur la même position. Dans la vue des débits, la ligne « TCP au même

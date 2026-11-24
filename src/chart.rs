@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 
 use windows_sys::Win32::Foundation::{COLORREF, RECT};
@@ -11,6 +11,12 @@ use crate::ports::{Protocol, wide};
 
 pub const RECEIVED_COLOR: COLORREF = rgb(87, 219, 191);
 pub const SENT_COLOR: COLORREF = rgb(129, 175, 253);
+const PORT_COLORS: [COLORREF; 12] = [
+    RECEIVED_COLOR, SENT_COLOR, rgb(251, 191, 111), rgb(238, 148, 195),
+    rgb(196, 164, 255), rgb(178, 227, 119), rgb(253, 135, 126), rgb(111, 221, 245),
+    rgb(244, 234, 133), rgb(220, 183, 150), rgb(137, 202, 254), rgb(250, 166, 244),
+];
+const LEGEND_ROW_HEIGHT: i32 = 19;
 
 pub const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
@@ -42,6 +48,34 @@ pub fn rate_label(rate: f64) -> String {
 pub struct Series {
     pub key: String,
     pub label: String,
+    color: Option<usize>,
+}
+
+impl Series {
+    pub fn new(key: String, label: String) -> Self {
+        Self { key, label, color: None }
+    }
+
+    pub fn assign_colors(series: &mut [Self], previous: &[Self]) {
+        let previous = previous.iter().filter_map(|series| Some((series.key.as_str(), series.color?)))
+            .collect::<HashMap<_, _>>();
+        let mut used = [0; PORT_COLORS.len()];
+        for series in series.iter_mut() {
+            series.color = previous.get(series.key.as_str()).copied();
+            if let Some(color) = series.color {
+                used[color] += 1;
+            }
+        }
+        for series in series.iter_mut().filter(|series| series.color.is_none()) {
+            let (color, count) = used.iter_mut().enumerate().min_by_key(|(_, count)| **count).unwrap();
+            *count += 1;
+            series.color = Some(color);
+        }
+    }
+
+    fn color(&self) -> COLORREF {
+        PORT_COLORS[self.color.unwrap_or(0)]
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -94,7 +128,8 @@ impl SelectionStats {
 }
 
 pub fn plot(bounds: RECT, selection: bool) -> RECT {
-    RECT { left: bounds.left + 80, right: bounds.right - if selection { 201 } else { 104 },
+    let legend_width = if selection { ((bounds.right - bounds.left) / 4).clamp(274, 316) } else { 104 };
+    RECT { left: bounds.left + 80, right: bounds.right - legend_width,
         top: bounds.top + 16, bottom: bounds.bottom - 24 }
 }
 
@@ -115,6 +150,10 @@ fn samples_for(points: &VecDeque<Point>, selection: Option<PortMetric>) -> impl 
     points.iter().filter(move |point| selection != Some(PortMetric::Rates) || point.port_span.is_some())
 }
 
+pub fn latest_sample(points: &VecDeque<Point>, metric: PortMetric) -> Option<&Point> {
+    samples_for(points, Some(metric)).next_back()
+}
+
 pub fn sample_at(points: &VecDeque<Point>, bounds: RECT, selection: Option<PortMetric>, x: i32) -> Option<&Point> {
     let plot = plot(bounds, selection.is_some());
     let latest = points.back()?;
@@ -130,8 +169,8 @@ fn series_value(point: &Point, series: &Series, metric: PortMetric) -> Option<f6
     point.socket(&series.key).and_then(|socket| metric.value(socket))
 }
 
-fn selected_peaks<'a>(points: &'a VecDeque<Point>, selection: PortSelection<'a>)
-    -> impl Iterator<Item = (&'a Series, Option<f64>)> + 'a
+fn selected_peaks<'a>(points: &VecDeque<Point>, selection: PortSelection<'a>)
+    -> impl Iterator<Item = (&'a Series, Option<f64>)>
 {
     selection.series.iter().map(move |series| {
         let peak = samples_for(points, Some(selection.metric)).filter_map(|point| series_value(point, series, selection.metric))
@@ -174,17 +213,63 @@ pub fn hovered_sockets<'a>(
     }
 }
 
-fn series_color(index: usize) -> COLORREF {
-    const PALETTE: [COLORREF; 12] = [
-        RECEIVED_COLOR, SENT_COLOR, rgb(251, 191, 111), rgb(238, 148, 195),
-        rgb(196, 164, 255), rgb(178, 227, 119), rgb(253, 135, 126), rgb(111, 221, 245),
-        rgb(244, 234, 133), rgb(220, 183, 150), rgb(137, 202, 254), rgb(250, 166, 244),
-    ];
-    PALETTE[index % PALETTE.len()]
+struct Legend<'a> {
+    area: RECT,
+    heading: bool,
+    rows: Vec<&'a Series>,
+    hidden: SelectionStats,
+}
+
+impl<'a> Legend<'a> {
+    fn area(bounds: RECT) -> RECT {
+        RECT { left: plot(bounds, true).right + 11, top: bounds.top + 6,
+            right: bounds.right, bottom: bounds.bottom - 6 }
+    }
+
+    fn new(bounds: RECT, selected: &[(&'a Series, Option<f64>)]) -> Self {
+        let area = Self::area(bounds);
+        let available = ((area.bottom - area.top) / LEGEND_ROW_HEIGHT).max(0) as usize;
+        let heading = !selected.is_empty() && available >= 4;
+        let capacity = available - usize::from(heading);
+        let mut rows = Vec::new();
+        let mut hidden = SelectionStats::default();
+        for &(series, peak) in selected {
+            if selected.len() <= capacity || (rows.len() < capacity.saturating_sub(1) && peak.is_some_and(|peak| peak > 0.0)) {
+                rows.push(series);
+            } else {
+                hidden.observe(peak);
+            }
+        }
+        Self { area, heading, rows, hidden }
+    }
+
+    fn row(&self, index: usize) -> RECT {
+        let top = self.area.top + (index + usize::from(self.heading)) as i32 * LEGEND_ROW_HEIGHT;
+        RECT { top, bottom: top + LEGEND_ROW_HEIGHT, ..self.area }
+    }
+
+    fn hit(&self, x: i32, y: i32) -> Option<&'a Series> {
+        let first = self.row(0);
+        if x < first.left || x >= first.right || y < first.top {
+            return None;
+        }
+        let row = ((y - first.top) / LEGEND_ROW_HEIGHT) as usize;
+        self.rows.get(row).copied()
+    }
+}
+
+pub fn legend_hit<'a>(points: &VecDeque<Point>, bounds: RECT, selection: PortSelection<'a>, x: i32, y: i32) -> Option<&'a Series> {
+    let area = Legend::area(bounds);
+    if x < area.left || x >= area.right || y < area.top || y >= area.bottom {
+        return None;
+    }
+    // The legend holds the selection references only, never the point history.
+    let peaks = selected_peaks(points, selection).collect::<Vec<_>>();
+    Legend::new(bounds, &peaks).hit(x, y)
 }
 
 pub fn paint(
-    dc: HDC, font: HFONT, bounds: RECT, points: &VecDeque<Point>, pointer: Option<i32>,
+    dc: HDC, font: HFONT, bounds: RECT, points: &VecDeque<Point>, pointer: Option<(i32, i32)>,
     selection: Option<PortSelection<'_>>, paused: bool,
 ) {
     let high_contrast = high_contrast();
@@ -204,7 +289,7 @@ pub fn paint(
         points.iter().filter_map(|point| point.rates)
             .map(|rate| rate.received.max(rate.sent)).fold(1.0, f64::max)
     };
-    let hovered_point = pointer.and_then(|x| sample_at(points, bounds, metric, x));
+    let hovered_point = pointer.and_then(|(x, _)| sample_at(points, bounds, metric, x));
     let plot = plot(bounds, selection.is_some());
     let data_plot = if selection.is_some() { series_plot(plot) } else { plot };
     let hovered = hovered_point.zip(points.back()).map(|(point, latest)| (point, sample_x(plot, latest, point)));
@@ -258,6 +343,9 @@ pub fn paint(
             LineTo(dc, x, plot.bottom + 1);
         }
         if let Some((metric, selected)) = metric.zip(selected.as_deref()) {
+            let legend = Legend::new(bounds, selected);
+            let focused = pointer.and_then(|(x, y)| legend.hit(x, y));
+            let last_point = latest_sample(points, metric);
             let mut stats = SelectionStats::default();
             for &(_, peak) in selected {
                 stats.observe(peak);
@@ -295,49 +383,37 @@ pub fn paint(
                 draw_marker(dc, data_plot, hovered, scale, zero_color, zero_value);
             }
 
-            let available = ((bounds.bottom - bounds.top - 20) / 18).max(1) as usize;
-            let has_summary = stats.zero + stats.no_data > 0;
-            let active_slots = available.saturating_sub(usize::from(has_summary));
-            let overflow = stats.active > active_slots && active_slots > 1;
-            let listed = stats.active.min(active_slots - usize::from(overflow));
-            let legend_start = plot.top - 6;
-            let active = selected.iter().filter(|(_, peak)| peak.is_some_and(|peak| peak > 0.0));
-            for (index, (series, _)) in active.enumerate() {
-                let color = if high_contrast { text } else { series_color(index) };
+            let last = last_point.zip(points.back()).map(|(point, latest)| (point, sample_x(data_plot, latest, point)));
+            let trace = |series: &Series, focused| {
+                let color = if high_contrast {
+                    if focused { GetSysColor(COLOR_HIGHLIGHT) } else { text }
+                } else {
+                    series.color()
+                };
                 let value = |point: &Point| series_value(point, series, metric);
                 match metric {
-                    PortMetric::Arrivals => draw_stems(dc, data_plot, points, scale, color, value),
+                    PortMetric::Arrivals => {
+                        draw_stems(dc, data_plot, points, scale, color, focused, value);
+                        if focused {
+                            draw_marker(dc, data_plot, last, scale, color, value);
+                        }
+                    }
                     PortMetric::Rates | PortMetric::Established => {
-                        draw_series(dc, data_plot, points, Some(metric), scale, color, 2, value);
-                        let last = samples_for(points, Some(metric)).next_back().zip(points.back())
-                            .map(|(point, latest)| (point, sample_x(data_plot, latest, point)));
+                        draw_series(dc, data_plot, points, Some(metric), scale, color, if focused { 4 } else { 2 }, value);
                         draw_marker(dc, data_plot, last, scale, color, value);
                     }
                 }
                 draw_marker(dc, data_plot, hovered, scale, color, value);
-                if index < listed {
-                    paint_legend(dc, bounds, plot.right, legend_start + index as i32 * 18, color, &series.label);
-                }
+            };
+            for &(series, _) in selected.iter().filter(|(series, peak)| {
+                peak.is_some_and(|peak| peak > 0.0) && !focused.is_some_and(|focused| std::ptr::eq(*series, focused))
+            }) {
+                trace(series, false);
             }
-            if overflow {
-                SetTextColor(dc, text);
-                paint_text(dc, plot.right + 19, legend_start + listed as i32 * 18,
-                    &format!("+ {} courbe(s) active(s)", stats.active - listed));
+            if let Some(series) = focused {
+                trace(series, true);
             }
-            if has_summary {
-                let y = legend_start + (listed + usize::from(overflow)) as i32 * 18;
-                match (stats.zero, stats.no_data) {
-                    (0, missing) => {
-                        SetTextColor(dc, text);
-                        paint_text(dc, plot.right + 19, y, &format!("{missing} sans relevé"));
-                    }
-                    (zero, missing) => {
-                        let label = if missing == 0 { format!("{zero} à zéro") }
-                            else { format!("{zero} à zéro · {missing} sans relevé") };
-                        paint_legend(dc, bounds, plot.right, y, zero_color, &label);
-                    }
-                }
-            }
+            paint_port_legend(dc, &legend, metric, last_point, focused, high_contrast, text, grid);
         } else {
             for (is_received, label, color, offset) in [(true, "Reçu", received, -6), (false, "Envoyé", sent, 15)] {
                 let value = |point: &Point| {
@@ -374,6 +450,70 @@ unsafe fn paint_legend(dc: HDC, bounds: RECT, plot_right: i32, top: i32, color: 
         FillRect(dc, &line, GetStockObject(DC_BRUSH));
         SetTextColor(dc, color);
         paint_label(dc, text, DT_LEFT, label);
+    }
+}
+
+unsafe fn paint_port_legend(
+    dc: HDC, legend: &Legend<'_>, metric: PortMetric, latest: Option<&Point>,
+    focused: Option<&Series>, contrast: bool, text: COLORREF, grid: COLORREF,
+) {
+    let columns = |row: RECT| {
+        let value_width = if metric == PortMetric::Rates { 73 } else { 52 };
+        let value = RECT { left: row.right - value_width - 7, right: row.right - 7, ..row };
+        let label = RECT { left: row.left + 13, right: value.left - 5, ..row };
+        (label, value)
+    };
+    unsafe {
+        if legend.heading {
+            let heading = RECT { bottom: legend.area.top + LEGEND_ROW_HEIGHT, ..legend.area };
+            let (label, value) = columns(heading);
+            SetTextColor(dc, text);
+            paint_label(dc, label, DT_LEFT, "Port · processus");
+            paint_label(dc, value, DT_RIGHT, "Au relevé");
+            SetDCPenColor(dc, grid);
+            MoveToEx(dc, heading.left + 4, heading.bottom - 1, std::ptr::null_mut());
+            LineTo(dc, heading.right - 5, heading.bottom - 1);
+        }
+        for (index, &series) in legend.rows.iter().enumerate() {
+            let row = legend.row(index);
+            let highlight = focused.is_some_and(|focused| std::ptr::eq(series, focused));
+            if highlight {
+                let background = if contrast { GetSysColor(COLOR_HIGHLIGHT) } else { rgb(41, 66, 73) };
+                SetDCBrushColor(dc, background);
+                FillRect(dc, &row, GetStockObject(DC_BRUSH));
+            }
+            let ink = if highlight && contrast { GetSysColor(COLOR_HIGHLIGHTTEXT) } else { text };
+            SetTextColor(dc, ink);
+            SetDCBrushColor(dc, if contrast { ink } else { series.color() });
+            let swatch = RECT { left: row.left + 4, right: row.left + 9, top: row.top + 5, bottom: row.bottom - 5 };
+            FillRect(dc, &swatch, GetStockObject(DC_BRUSH));
+            let (label, value) = columns(row);
+            let latest = latest.and_then(|point| series_value(point, series, metric));
+            let latest = latest.map_or_else(|| "—".into(), |value| match metric {
+                PortMetric::Rates => rate_label(value),
+                _ => format!("{value:.0}"),
+            });
+            paint_label(dc, label, DT_LEFT, &series.label);
+            paint_label(dc, value, DT_RIGHT, &latest);
+        }
+
+        let hidden = &legend.hidden;
+        let mut summary = Vec::new();
+        if hidden.active > 0 {
+            summary.push(format!("+{} actifs", hidden.active));
+        }
+        if hidden.zero > 0 {
+            summary.push(format!("{} à zéro", hidden.zero));
+        }
+        if hidden.no_data > 0 {
+            summary.push(format!("{} sans relevé", hidden.no_data));
+        }
+        let row = legend.row(legend.rows.len());
+        if !summary.is_empty() && row.bottom <= legend.area.bottom {
+            let line = RECT { left: row.left + 8, right: row.right - 5, ..row };
+            SetTextColor(dc, text);
+            paint_label(dc, line, DT_LEFT, &summary.join(" · "));
+        }
     }
 }
 
@@ -421,10 +561,11 @@ unsafe fn draw_series(
 }
 
 unsafe fn draw_stems(
-    dc: HDC, plot: RECT, points: &VecDeque<Point>, scale: f64, color: COLORREF,
+    dc: HDC, plot: RECT, points: &VecDeque<Point>, scale: f64, color: COLORREF, focused: bool,
     value_at: impl Fn(&Point) -> Option<f64>,
 ) {
     let Some(latest) = points.back() else { return };
+    let radius = if focused { 3 } else { 2 };
     unsafe {
         SetDCPenColor(dc, color);
         SetDCBrushColor(dc, color);
@@ -434,7 +575,7 @@ unsafe fn draw_stems(
             let y = y_position(plot, scale, value);
             MoveToEx(dc, x, plot.bottom, std::ptr::null_mut());
             LineTo(dc, x, y);
-            Ellipse(dc, x - 2, y - 2, x + 3, y + 3);
+            Ellipse(dc, x - radius, y - radius, x + radius + 1, y + radius + 1);
         }
     }
 }
@@ -460,9 +601,8 @@ mod tests {
                 protocol: Protocol::Tcp, port_rates: None,
             }
         });
-        let selection = sockets.iter().map(|socket| Series {
-            key: socket.key.clone(), label: socket.endpoint.clone(),
-        }).collect::<Vec<_>>();
+        let selection = sockets.iter().map(|socket| Series::new(socket.key.clone(), socket.endpoint.clone()))
+            .collect::<Vec<_>>();
         let points = VecDeque::from([Point {
             at: Instant::now(), rates: None, span: Duration::ZERO, sockets: sockets.into(), port_span: None,
         }]);
@@ -480,7 +620,7 @@ mod tests {
         assert!(y_position(plot, established_scale, 1.0) > plot.top);
 
         let mut selection = selection;
-        selection.push(Series { key: "missing".into(), label: "Sans relevé".into() });
+        selection.push(Series::new("missing".into(), "Sans relevé".into()));
         let established = PortSelection { series: &selection, metric: PortMetric::Established };
         let arrivals = PortSelection { series: &selection, metric: PortMetric::Arrivals };
         assert_eq!(selection_stats(&points, established), SelectionStats { active: 1, zero: 2, no_data: 1 });
@@ -510,7 +650,7 @@ mod tests {
             reading(3, true, quiet, quiet),
             reading(4, false, None, None),
         ]);
-        let selection = points[0].sockets.iter().map(|socket| Series { key: socket.key.clone(), label: socket.endpoint.clone() })
+        let selection = points[0].sockets.iter().map(|socket| Series::new(socket.key.clone(), socket.endpoint.clone()))
             .collect::<Vec<_>>();
         let metric = PortMetric::Rates;
         let selected = PortSelection { series: &selection, metric };
@@ -532,5 +672,30 @@ mod tests {
         let lost_x = sample_x(plot, points.back().unwrap(), &points[2]);
         assert_eq!(sample_at(&points, bounds, Some(metric), lost_x).unwrap().at, points[2].at);
         assert_eq!(sample_at(&points, bounds, Some(metric), plot.right).unwrap().at, points[3].at);
+        assert_eq!(latest_sample(&points, metric).unwrap().at, points[3].at);
+    }
+
+    #[test]
+    fn legend_keeps_existing_colors_and_full_width_hit_targets_for_quiet_ports() {
+        let series = |port: &str| Series::new(port.into(), format!("{port} · serveur"));
+        let mut previous = [series("443/TCP"), series("5353/UDP")];
+        Series::assign_colors(&mut previous, &[]);
+        let mut current = [series("53/UDP"), series("443/TCP"), series("5353/UDP")];
+        Series::assign_colors(&mut current, &previous);
+        assert_eq!(current[1].color(), previous[0].color());
+        assert_eq!(current[2].color(), previous[1].color());
+        assert!(current.iter().skip(1).all(|series| series.color() != current[0].color()));
+
+        let bounds = RECT { left: 0, top: 0, right: 800, bottom: 150 };
+        let selection = PortSelection { series: &current, metric: PortMetric::Rates };
+        let points = VecDeque::new();
+        let peaks = selected_peaks(&points, selection).collect::<Vec<_>>();
+        let legend = Legend::new(bounds, &peaks);
+        let rect = legend.row(1);
+        for x in [rect.left, rect.right - 1] {
+            assert_eq!(legend_hit(&points, bounds, selection, x, rect.top).unwrap().key, "443/TCP");
+        }
+        assert!(legend_hit(&points, bounds, selection, rect.left - 1, rect.top).is_none());
+        assert!(legend_hit(&points, bounds, selection, rect.left, legend.area.top).is_none());
     }
 }

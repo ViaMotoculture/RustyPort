@@ -14,14 +14,14 @@ RustyPort est un utilitaire Windows écrit en Rust avec une interface Win32. Il 
 
 ## Lire le graphique et conserver un relevé
 
-Le graphique couvre les 60 dernières secondes. Utilisez « Ports sélectionnés » pour choisir une mesure par port.
+Le graphique couvre les 60 dernières secondes. « Ports sélectionnés » ouvre la vue **Connexions établies** par défaut. Le menu voisin permet de choisir la mesure.
 
 - **Débit des interfaces** affiche les octets reçus et envoyés par seconde, cumulés sur les interfaces actives hors bouclage.
 - **Débit par port** affiche une courbe en octets par seconde par port TCP ou UDP sélectionné. La courbe additionne les octets reçus et envoyés rapportés par Windows. Le survol détaille les deux sens. La collecte utilise des fenêtres d’au moins une seconde et demande les droits de capture de Windows. Si l’accès est refusé, lancez RustyPort en tant qu’administrateur.
 - **Nouvelles connexions** affiche un pic pour chaque relevé où de nouvelles connexions TCP ont été observées. Une connexion ouverte et refermée entre deux relevés peut manquer.
 - **Connexions établies** affiche le nombre de connexions TCP ouvertes à chaque relevé. Une ligne plate indique que ce nombre est stable.
 
-Le survol précise la mesure, le port et le processus observés. La légende affiche d’abord les ports dont la mesure est non nulle. Les ports restés à zéro partagent un tracé et les ports sans relevé sont comptés séparément.
+La légende indique la valeur du dernier relevé. Survolez un port dans la légende pour afficher son détail, ou survolez le tracé pour lire un relevé plus ancien. Les couleurs des ports déjà sélectionnés restent stables quand de nouvelles courbes apparaissent. Pour une sélection dense, la légende met en avant les ports dont la mesure est non nulle. Les ports restés à zéro partagent un tracé et les ports sans relevé sont comptés séparément.
 
 « Pause » fige le graphique pendant que les relevés continuent. L’archivage local est désactivé au démarrage. Le volet « Historique » permet de l’activer, de parcourir les relevés archivés, de voir l’espace utilisé et de nettoyer la session. Les exports CSV portent sur toute la session ou une période choisie. La colonne `tcp_nouvelles_releve` est vide quand la comparaison entre deux relevés est indisponible. Les débits par port et leur durée de mesure figurent sur les lignes TCP et UDP lorsqu’ils ont été mesurés. Les fichiers temporaires sont supprimés lorsque RustyPort quitte. Les CSV restent à l’emplacement choisi.
 

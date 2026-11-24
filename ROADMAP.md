@@ -86,6 +86,8 @@
   de la liste et du graphique lors des relevés.
 - Offrir deux mesures par port TCP. Afficher les nouvelles connexions
   observées sous forme de pics et garder la vue des connexions établies.
+- Conserver la couleur des ports sélectionnés et afficher leur dernière
+  valeur dans une légende dont les lignes se survolent.
 
 ## À valider
 

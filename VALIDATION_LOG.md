@@ -170,3 +170,16 @@
   autorisée avec `cargo test --locked port_traffic::tests::measures_native_loopback_tcp_and_udp_in_both_directions -- --ignored --exact`.
 - L'exécutable de test avec son icône a pour SHA-256
   `6D4D369915E4A03777F57D9B7C7546603931A2600D669BD58AF02E7FB41D8D31`.
+
+## 2026-11-24 - Couleurs et survol de la légende
+
+- Les 25 tests ordinaires passent en version optimisée. Le test natif
+  confirme le titre « RustyPort » et le mode « Connexions établies »
+  par défaut pour les ports sélectionnés.
+- À 900 × 630 et 1894 × 878, l'ajout d'un troisième port en tête de
+  la légende conserve les deux premières couleurs dans un essai isolé.
+  Le survol sur toute la ligne affiche le dernier relevé du port et
+  sépare les débits reçu et envoyé. Les noms de la fixture et les valeurs
+  tiennent à la taille minimale.
+- L'exécutable de test avec son icône a pour SHA-256
+  `17E82F2B71E85005601401A9FBB7B86DE35B7369245088C084BD6C30B9994DDB`.

@@ -187,7 +187,7 @@ impl App {
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Débit par port") as isize);
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Nouvelles connexions") as isize);
             SendMessageW(graph_metric, CB_ADDSTRING, 0, w!("Connexions établies") as isize);
-            SendMessageW(graph_metric, CB_SETCURSEL, 0, 0);
+            SendMessageW(graph_metric, CB_SETCURSEL, 2, 0);
             ShowWindow(graph_metric, SW_HIDE);
         }
         let pause_graph = control(window, w!("BUTTON"), "Pause", 0, ID_PAUSE_GRAPH, false)?;
@@ -446,7 +446,7 @@ impl App {
         let series = self.graph_series.borrow();
         let selection = series.as_deref().map(|series| chart::PortSelection { series, metric: self.port_metric() });
         chart::paint(dc, theme.body_font(), layout.plot, archive.as_ref().unwrap_or(&live.points),
-            self.graph_pointer.get().map(|(x, _)| x), selection, archive.is_some());
+            self.graph_pointer.get(), selection, archive.is_some());
     }
 
     fn selected(&self) -> Option<Entry> {
@@ -580,9 +580,9 @@ impl App {
 
     fn port_metric(&self) -> chart::PortMetric {
         match unsafe { SendMessageW(self.graph_metric, CB_GETCURSEL, 0, 0) } {
+            0 => chart::PortMetric::Rates,
             1 => chart::PortMetric::Arrivals,
-            2 => chart::PortMetric::Established,
-            _ => chart::PortMetric::Rates,
+            _ => chart::PortMetric::Established,
         }
     }
 
@@ -616,19 +616,43 @@ impl App {
         let bounds = self.chart_bounds();
         let mut detail = String::new();
         let hovered = self.graph_pointer.get().and_then(|(x, y)| {
-            let point = chart::sample_at(points, bounds, metric, x)?;
+            if port_rates && port_state == PortTrafficState::AccessDenied && paused.is_none() {
+                return None;
+            }
+            let legend = selection.and_then(|view| chart::legend_hit(points, bounds, view, x, y));
+            let point = if let Some(series) = legend {
+                match metric.and_then(|metric| chart::latest_sample(points, metric)) {
+                    Some(point) => point,
+                    None => {
+                        detail = format!("{} · Dernière mesure indisponible.", series.label);
+                        return Some("Dernier relevé".into());
+                    }
+                }
+            } else {
+                chart::sample_at(points, bounds, metric, x)?
+            };
             let age = format!("{:.1}", point.at.elapsed().as_secs_f64()).replace('.', ",");
-            let sockets = chart::hovered_sockets(point, points, bounds, selection, y);
+            let sockets = if let Some(series) = legend {
+                point.socket(&series.key).into_iter().collect::<Vec<_>>()
+            } else {
+                chart::hovered_sockets(point, points, bounds, selection, y)
+            };
             if let Some(socket) = sockets.first() {
                 detail = format!("{} · {}", socket.name, socket.endpoint);
                 if port_rates {
                     if let Some(rates) = socket.port_rates {
                         let _ = write!(detail, " · Reçu {} · Envoyé {} · {}", chart::rate_label(rates.received),
                             chart::rate_label(rates.sent), socket.address);
+                    } else {
+                        detail.push_str(" · Débit indisponible à ce relevé.");
                     }
                 } else {
-                    if arrivals && let Some(count) = socket.arrivals {
-                        let _ = write!(detail, " · {count} nouvelle(s)");
+                    if arrivals {
+                        if let Some(count) = socket.arrivals {
+                            let _ = write!(detail, " · {count} nouvelle(s)");
+                        } else {
+                            detail.push_str(" · Nouvelles connexions indisponibles");
+                        }
                     }
                     let _ = write!(detail, " · {} établie(s) · {}", socket.established, socket.address);
                     if !socket.peer.is_empty() {
@@ -646,18 +670,24 @@ impl App {
                     }
                 }
             } else {
-                detail = if port_rates {
-                    "Aucun débit attribuable à ces ports à ce relevé."
+                detail = if let Some(series) = legend {
+                    format!("{} · Dernière mesure indisponible.", series.label)
+                } else if port_rates {
+                    "Aucun débit attribuable à ces ports à ce relevé.".into()
                 } else if arrivals {
-                    "Nouvelles connexions indisponibles pour ces ports à ce relevé."
+                    "Nouvelles connexions indisponibles pour ces ports à ce relevé.".into()
                 } else {
-                    "Aucune connexion TCP correspondante au relevé."
-                }.into();
+                    "Aucune connexion TCP correspondante au relevé.".into()
+                };
             }
             let label = if series.is_some() {
                 let measurement = if port_rates { "Débit en octets/s · reçu + envoyé" }
                     else if arrivals { "Nouvelles TCP depuis le relevé précédent" } else { "Connexions TCP établies" };
-                let mut label = format!("Il y a {age} s · {measurement}");
+                let mut label = if legend.is_some() {
+                    format!("Dernier relevé · il y a {age} s · {measurement}")
+                } else {
+                    format!("Il y a {age} s · {measurement}")
+                };
                 if sockets.len() > 1 {
                     let others = sockets.iter().skip(1).take(2).map(|socket| socket.endpoint.as_str())
                         .collect::<Vec<_>>().join(", ");
@@ -709,11 +739,11 @@ impl App {
             } else if port_rates && port_state == PortTrafficState::AccessDenied {
                 "Ouvre RustyPort en tant qu’administrateur pour accéder à la capture réseau de Windows."
             } else if port_rates {
-                "Une courbe par port TCP ou UDP. Le débit total additionne les octets reçus et envoyés."
+                "Une courbe par port · reçu + envoyé en octets/s. Survole la légende pour le détail."
             } else if arrivals {
                 "Chaque pic compte les nouvelles connexions observées entre deux relevés."
             } else if selection.is_some() {
-                "Une ligne plate indique que le nombre de connexions ouvertes reste stable."
+                "Connexions ouvertes au relevé. Survole la légende pour le détail."
             } else {
                 "Débit total en octets par seconde sur les interfaces actives hors bouclage."
             }.into();
@@ -744,18 +774,21 @@ impl App {
             unsafe { ShowWindow(self.graph_metric, if selected { SW_SHOWNA } else { SW_HIDE }) };
         }
         let port_rates = self.port_metric() == chart::PortMetric::Rates;
+        let previous = self.graph_series.borrow();
         let series = selected.then(|| {
             let mut series: Vec<_> = self.selected_entries().into_iter().filter_map(|entry| {
                 let port = entry.port;
-                (port_rates || port.endpoint.protocol == Protocol::Tcp).then(|| chart::Series {
-                    key: port.graph_key(),
-                    label: format!("{} · {}", port.endpoint.label(), port.owner.name),
+                (port_rates || port.endpoint.protocol == Protocol::Tcp).then(|| {
+                    chart::Series::new(port.graph_key(), format!("{} · {}", port.endpoint.label(), port.owner.name))
                 })
             }).collect();
             series.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+            chart::Series::assign_colors(&mut series, previous.as_deref().unwrap_or_default());
             series
         });
-        if *self.graph_series.borrow() != series {
+        let changed = *previous != series;
+        drop(previous);
+        if changed {
             self.graph_series.replace(series);
             self.refresh_graph_mode();
         }
@@ -2202,7 +2235,7 @@ fn create_window() -> io::Result<HWND> {
             return Err(io::Error::last_os_error());
         }
         let window = CreateWindowExW(
-            0, SINGLETON_CLASS, w!("RustyPort — Surveillance réseau"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            0, SINGLETON_CLASS, w!("RustyPort"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT, CW_USEDEFAULT, 1100, 760, null_mut(), null_mut(), instance, null(),
         );
         if window.is_null() { Err(io::Error::last_os_error()) } else { Ok(window) }
@@ -2318,6 +2351,7 @@ mod tests {
         let (server, _) = listener_a.accept().unwrap();
 
         let window = create_window().unwrap();
+        assert_eq!(window_text(window), "RustyPort");
         let app = Box::new(App::new(window).unwrap());
         *app.level_preferences.borrow_mut() = Ok(LevelPreferences::in_memory());
         assert!(app._small_icon.custom && app._large_icon.custom);
@@ -2475,7 +2509,7 @@ mod tests {
             SetKeyboardState(keyboard.as_ptr());
         }
         assert_eq!(app.selected_count(), app.rows.borrow().len());
-        assert!(app.port_metric() == chart::PortMetric::Rates);
+        assert!(app.port_metric() == chart::PortMetric::Established);
         unsafe {
             SendMessageW(app.graph_metric, CB_SETCURSEL, 1, 0);
             SendMessageW(app.port_graph, BM_SETCHECK, BST_CHECKED as usize, 0);
